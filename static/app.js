@@ -287,12 +287,21 @@ function clearOutput() {
 $("clear-output").addEventListener("click", clearOutput);
 
 async function checkHealth() {
+  const badge = $("backend-status");
   try {
     const response = await fetch("/api/health");
     if (!response.ok) throw new Error("Backend chưa sẵn sàng");
-    $("backend-status").innerHTML = '<span class="status-dot"></span> Backend đang hoạt động';
+    const info = await response.json();
+    const modeLabel = info.runner === "docker" ? "Docker" : "Chạy trực tiếp";
+    if (info.ready === false) {
+      badge.innerHTML = info.runner === "docker"
+        ? '<span style="color:var(--red)">●</span> Docker chưa bật — hãy mở Docker Desktop'
+        : '<span style="color:var(--red)">●</span> Máy chủ chưa chạy được C++';
+    } else {
+      badge.innerHTML = `<span class="status-dot"></span> Backend đang hoạt động · ${modeLabel}`;
+    }
   } catch {
-    $("backend-status").innerHTML = '<span style="color:var(--red)">●</span> Không kết nối được backend';
+    badge.innerHTML = '<span style="color:var(--red)">●</span> Không kết nối được backend';
   }
 }
 
@@ -344,6 +353,8 @@ $("run").addEventListener("click", async () => {
 });
 
 checkHealth();
+// Cập nhật định kỳ để thấy ngay khi bật/tắt Docker.
+setInterval(checkHealth, 15000);
 
 // GDB source-level debugger. Normal /api/run remains separate and unchanged.
 let debugSessionId = null;
