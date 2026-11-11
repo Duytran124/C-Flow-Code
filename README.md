@@ -77,10 +77,27 @@ The backend chooses how to run C++ with the `CPPFLOW_EXEC_MODE` environment vari
 
 1. Push this folder to a GitHub repository (without `.venv`).
 2. On Render: New → Web Service → connect the repo → Language/Runtime **Docker** → Instance type **Free**. The root `Dockerfile` installs `g++`/`gdb` and starts the app in `direct` mode as a non-root user.
-3. Keep exactly **one worker** (debug sessions live in process memory). Do not store secrets in this service's environment variables.
+3. Keep exactly **one worker** (debug sessions live in process memory). Keep unrelated secrets out of this service's environment; the runner token below is hidden from user code on Linux (`PR_SET_DUMPABLE`).
 4. Free instances sleep after a period without traffic and are small; compiling large headers such as `<bits/stdc++.h>` may be slow or run out of memory. GDB may be refused by some container runtimes (ptrace); the UI then shows a message and "Chạy C++" still works.
 
 Anyone with the link can run C++ on that server. Treat it as a public demo, not a hardened judge system.
+
+## Optional: use Docker on your own PC when it is on (hybrid)
+
+The public site can hand code execution over to a **runner** on your PC (Docker) through an ngrok tunnel, and fall back to direct mode on the server when the runner is off.
+
+**Public site (Render → Environment):**
+- `CPPFLOW_REMOTE_RUNNER_URL` = `https://your-domain.ngrok-free.app` (no trailing slash)
+- `CPPFLOW_REMOTE_RUNNER_TOKEN` = a long random string, e.g. `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+- optional `CPPFLOW_REMOTE_DEBUG=0` keeps the step debugger on the server and only moves "Chạy C++" to your PC.
+
+**Your PC (Docker Desktop running):**
+1. `.\runner.ps1` — starts the runner on port 8001 with Docker mode and asks for the same token.
+2. In another terminal: `ngrok http 8001` (use a reserved/static ngrok domain so the URL does not change).
+
+The runner rejects any `/api/*` call without the correct `X-Runner-Token`. The header pill on the site shows `Docker (máy chạy từ xa)` while the runner is reachable and `Chạy trực tiếp (máy Docker đang tắt)` otherwise. If the runner disappears mid debug session, the user sees a message and restarts the debug; new runs use the fallback automatically.
+
+Security: your PC runs strangers' code in Docker (no network, memory/CPU/PID limits). The debugger container needs ptrace and a looser seccomp profile than the normal runner, so consider `CPPFLOW_REMOTE_DEBUG=0`. Use a strong token and stop the runner when you do not want to serve traffic.
 
 ## Project structure
 
@@ -90,13 +107,15 @@ cpp-flow/
 │   ├── main.py
 │   ├── runner.py
 │   ├── debugger.py
-│   └── sandbox.py
+│   ├── sandbox.py
+│   └── remote.py
 ├── static/
 │   ├── index.html
 │   ├── app.css
 │   └── app.js
 ├── Dockerfile          (public deploy, direct mode)
 ├── Dockerfile.debug    (local debugger image for Docker mode)
+├── runner.ps1          (start the Docker runner on your PC)
 ├── requirements.txt
 └── README.md
 ```
