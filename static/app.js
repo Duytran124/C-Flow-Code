@@ -292,7 +292,9 @@ async function checkHealth() {
     const response = await fetch("/api/health");
     if (!response.ok) throw new Error("Backend chưa sẵn sàng");
     const info = await response.json();
-    const modeLabel = info.runner === "docker" ? "Docker" : "Chạy trực tiếp";
+    let modeLabel = info.runner === "docker" ? "Docker" : "Chạy trực tiếp";
+    if (info.remote) modeLabel = "Docker (máy chạy từ xa)";
+    else if (info.remoteConfigured && info.runner !== "docker") modeLabel = "Chạy trực tiếp (máy Docker đang tắt)";
     if (info.ready === false) {
       badge.innerHTML = info.runner === "docker"
         ? '<span style="color:var(--red)">●</span> Docker chưa bật — hãy mở Docker Desktop'
