@@ -15,6 +15,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -89,6 +90,20 @@ def pch_include_args() -> list[str]:
     if directory and (Path(directory) / "bits" / "stdc++.h.gch").is_file():
         return [f"-I{directory}"]
     return []
+
+
+def protect_process() -> None:
+    """Chặn tiến trình cùng user (tức code người dùng ở chế độ trực tiếp) đọc
+    /proc/<pid>/environ và bộ nhớ của server, nơi có mật khẩu runner. Chỉ có tác dụng trên Linux."""
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl(4, 0, 0, 0, 0)  # PR_SET_DUMPABLE = 4, giá trị 0
+    except Exception as exc:  # không để lỗi này làm hỏng việc khởi động
+        print(f"[sandbox] không đặt được PR_SET_DUMPABLE: {exc}", file=sys.stderr, flush=True)
 
 
 def describe() -> dict[str, object]:
