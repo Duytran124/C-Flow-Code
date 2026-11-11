@@ -95,6 +95,7 @@ def _run_direct(source: bytes, user_input: bytes) -> dict:
             with sandbox.run_slot():
                 compile_status, compile_timed_out = sandbox.run_limited(
                     ["g++", "-std=c++20", "-O0", "-Wall", "-Wextra",
+                     *sandbox.pch_include_args(),
                      "main.cpp", "-o", "main"],
                     cwd=work,
                     timeout=COMPILE_TIMEOUT_SECONDS,

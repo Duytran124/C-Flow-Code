@@ -84,8 +84,14 @@ def index():
 
 @app.get("/api/health")
 def health():
-    mode = sandbox.current_mode_label()
-    return {"ok": True, "service": "cpp-flow", "runner": mode, "debugger": f"gdb-{mode}"}
+    info = sandbox.describe()
+    return {
+        "ok": True,
+        "service": "cpp-flow",
+        "runner": info["mode"],
+        "ready": info["ready"],
+        "debugger": f"gdb-{info['mode']}",
+    }
 
 
 @app.post("/api/run")

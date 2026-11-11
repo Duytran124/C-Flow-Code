@@ -283,7 +283,8 @@ class DebugSession:
             with sandbox.run_slot():
                 status, timed_out = sandbox.run_limited(
                     ["g++", "-std=c++20", "-g3", "-O0", "-fno-omit-frame-pointer",
-                     "-Wall", "-Wextra", "main.cpp", "-o", "main"],
+                     "-Wall", "-Wextra", *sandbox.pch_include_args(),
+                     "main.cpp", "-o", "main"],
                     cwd=work, timeout=COMPILE_TIMEOUT_SECONDS,
                     cpu=COMPILE_TIMEOUT_SECONDS, mem_mb=COMPILE_MEM_MB,
                     stdout_path=work / "compile.txt",

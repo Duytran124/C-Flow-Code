@@ -78,9 +78,27 @@ def resolve_mode(need_gdb: bool = False) -> str | None:
     return "docker"  # Để code gọi Docker báo lỗi quen thuộc ("hãy mở Docker Desktop").
 
 
-def current_mode_label() -> str:
+def pch_include_args() -> list[str]:
+    """Tham số `-I` trỏ tới header biên dịch sẵn của <bits/stdc++.h> (nếu có).
+
+    Thư mục được tạo lúc build image (xem Dockerfile) và khai báo bằng CPPFLOW_PCH_DIR.
+    Chỉ có tác dụng khi `#include <bits/stdc++.h>` là dòng include đầu tiên của code;
+    ngược lại, GCC tự dùng header gốc nên kết quả vẫn đúng, chỉ không nhanh hơn.
+    """
+    directory = os.environ.get("CPPFLOW_PCH_DIR", "").strip()
+    if directory and (Path(directory) / "bits" / "stdc++.h.gch").is_file():
+        return [f"-I{directory}"]
+    return []
+
+
+def describe() -> dict[str, object]:
+    """Chế độ đang dùng và máy chủ có sẵn sàng chạy C++ ở chế độ đó không (cho /api/health)."""
     mode = resolve_mode(need_gdb=False)
-    return mode or "unavailable"
+    if mode == "direct":
+        return {"mode": "direct", "ready": True}
+    if mode == "docker":
+        return {"mode": "docker", "ready": docker_available()}
+    return {"mode": "direct", "ready": False}  # ép direct nhưng máy thiếu g++/prlimit
 
 
 @contextmanager
