@@ -8,6 +8,15 @@ RUN apt-get update \
         g++ gdb util-linux \
     && rm -rf /var/lib/apt/lists/*
 
+# Biên dịch sẵn <bits/stdc++.h> (precompiled header) để code dùng header này biên dịch nhanh
+# hơn nhiều trên máy yếu. Cờ biên dịch phải khớp với cờ trong app/runner.py và app/debugger.py.
+# File .h bọc ngoài chỉ chuyển tiếp tới header gốc, dùng khi PCH không khả dụng.
+RUN mkdir -p /opt/pch/bits \
+    && echo '#include_next <bits/stdc++.h>' > /opt/pch/bits/stdc++.h \
+    && g++ -std=c++20 -g3 -O0 -fno-omit-frame-pointer -Wall -Wextra \
+        -x c++-header /opt/pch/bits/stdc++.h -o /opt/pch/bits/stdc++.h.gch \
+    && chmod -R a+rX /opt/pch
+
 # Chạy bằng user thường (không phải root) để code người dùng không có quyền root.
 RUN useradd --create-home --uid 10001 appuser
 
@@ -21,6 +30,7 @@ COPY static ./static
 USER appuser
 
 ENV CPPFLOW_EXEC_MODE=direct \
+    CPPFLOW_PCH_DIR=/opt/pch \
     CPPFLOW_MAX_CONCURRENT_RUNS=2 \
     CPPFLOW_MAX_DEBUG_SESSIONS=3 \
     CPPFLOW_RATE_LIMIT_PER_MIN=30 \

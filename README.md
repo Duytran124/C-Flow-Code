@@ -71,7 +71,7 @@ The backend chooses how to run C++ with the `CPPFLOW_EXEC_MODE` environment vari
 | `docker` | Always use Docker (the local setup described above) |
 | `direct` | Always run `g++`/`gdb` directly inside the machine/container running the web app (Linux only, needs `g++`, `gdb`, `prlimit`) |
 
-`direct` mode is weaker isolation than Docker. It applies `prlimit` limits (CPU, memory, output size, process count), a wall-clock timeout, kills the whole process group, hands the program a clean environment (no server env vars), and caps concurrent runs/debug sessions. Other environment variables: `CPPFLOW_MAX_CONCURRENT_RUNS` (default 2), `CPPFLOW_MAX_DEBUG_SESSIONS` (default 3), `CPPFLOW_RATE_LIMIT_PER_MIN` (default 30 runs/debug-starts per IP, 0 disables).
+`direct` mode is weaker isolation than Docker. It applies `prlimit` limits (CPU, memory, output size, process count), a wall-clock timeout, kills the whole process group, hands the program a clean environment (no server env vars), and caps concurrent runs/debug sessions. Other environment variables: `CPPFLOW_MAX_CONCURRENT_RUNS` (default 2), `CPPFLOW_MAX_DEBUG_SESSIONS` (default 3), `CPPFLOW_RATE_LIMIT_PER_MIN` (default 30 runs/debug-starts per IP, 0 disables). `CPPFLOW_PCH_DIR` points to a precompiled `<bits/stdc++.h>` (built in the `Dockerfile`) that makes code starting with `#include <bits/stdc++.h>` compile several times faster; it only helps when that include is the first one in the file. The status pill in the page header shows which mode is active (Docker or direct) and refreshes every 15 seconds.
 
 ## Deploying publicly (e.g. Render, free web service)
 
