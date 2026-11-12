@@ -1,13 +1,16 @@
 
+import os
 import signal
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
-from app import sandbox
+from app import compile_cache, sandbox
 
-IMAGE = "gcc:14"
+# Image Docker để biên dịch/chạy khi ở chế độ Docker. Mặc định gcc:14; runner.ps1 đặt thành
+# image tự dựng (cpp-flow-debug:local) có sẵn bản biên dịch trước của <bits/stdc++.h>.
+IMAGE = os.environ.get("CPPFLOW_RUN_IMAGE", "").strip() or "gcc:14"
 MAX_SOURCE_BYTES = 100_000
 MAX_INPUT_BYTES = 20_000
 RUN_TIMEOUT_SECONDS = 5
@@ -91,36 +94,51 @@ def _run_direct(source: bytes, user_input: bytes) -> dict:
         (work / "main.cpp").write_bytes(source)
         (work / "input.txt").write_bytes(user_input)
 
+        compile_flags = ["-std=c++20", "-O0", "-Wall", "-Wextra"]
+        cache_key = compile_cache.make_key(source, compile_flags)
+
         try:
             with sandbox.run_slot():
-                compile_status, compile_timed_out = sandbox.run_limited(
-                    ["g++", "-std=c++20", "-O0", "-Wall", "-Wextra",
-                     *sandbox.pch_include_args(),
-                     "main.cpp", "-o", "main"],
-                    cwd=work,
-                    timeout=COMPILE_TIMEOUT_SECONDS,
-                    cpu=COMPILE_TIMEOUT_SECONDS,
-                    mem_mb=DIRECT_COMPILE_MEM_MB,
-                    stdout_path=work / "compile.txt",
-                )
-                compile_output = sandbox.read_text(
-                    work / "compile.txt", MAX_OUTPUT_CHARS * 4
-                )
+                cached = compile_cache.get(cache_key)
+                if cached is not None:
+                    # Code y hệt lần trước: dùng lại file đã biên dịch, bỏ qua g++.
+                    binary, compile_output = cached
+                    (work / "main").write_bytes(binary)
+                    os.chmod(work / "main", 0o755)
+                else:
+                    compile_status, compile_timed_out = sandbox.run_limited(
+                        ["g++", *compile_flags,
+                         *sandbox.pch_include_args("run"),
+                         "main.cpp", "-o", "main"],
+                        cwd=work,
+                        timeout=COMPILE_TIMEOUT_SECONDS,
+                        cpu=COMPILE_TIMEOUT_SECONDS,
+                        mem_mb=DIRECT_COMPILE_MEM_MB,
+                        stdout_path=work / "compile.txt",
+                    )
+                    compile_output = sandbox.read_text(
+                        work / "compile.txt", MAX_OUTPUT_CHARS * 4
+                    )
 
-                if compile_timed_out:
-                    return {
-                        "status": "error", "kind": "compile_timeout",
-                        "stdout": "",
-                        "stderr": f"Biên dịch C++ vượt quá {COMPILE_TIMEOUT_SECONDS} giây.",
-                        "exitCode": None, "durationMs": elapsed_ms(),
-                    }
+                    if compile_timed_out:
+                        return {
+                            "status": "error", "kind": "compile_timeout",
+                            "stdout": "",
+                            "stderr": f"Biên dịch C++ vượt quá {COMPILE_TIMEOUT_SECONDS} giây.",
+                            "exitCode": None, "durationMs": elapsed_ms(),
+                        }
 
-                if compile_status != 0:
-                    return {
-                        "status": "error", "kind": "compile",
-                        "stdout": "", "stderr": _clip(compile_output.strip()),
-                        "exitCode": compile_status, "durationMs": elapsed_ms(),
-                    }
+                    if compile_status != 0:
+                        return {
+                            "status": "error", "kind": "compile",
+                            "stdout": "", "stderr": _clip(compile_output.strip()),
+                            "exitCode": compile_status, "durationMs": elapsed_ms(),
+                        }
+
+                    try:
+                        compile_cache.put(cache_key, (work / "main").read_bytes(), compile_output)
+                    except OSError:
+                        pass  # không lưu được bộ đệm thì thôi, lần sau biên dịch lại
 
                 run_status, run_timed_out = sandbox.run_limited(
                     ["./main"],
@@ -202,7 +220,7 @@ def _run_docker(source: bytes, user_input: bytes) -> dict:
 set +e
 
 timeout {COMPILE_TIMEOUT_SECONDS}s \
-    g++ -std=c++20 -O0 -Wall -Wextra \
+    g++ -std=c++20 -O0 -Wall -Wextra -I/opt/pch-run \
     /input/main.cpp -o /tmp/main
 
 compile_status=$?

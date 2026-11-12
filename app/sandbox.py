@@ -79,14 +79,17 @@ def resolve_mode(need_gdb: bool = False) -> str | None:
     return "docker"  # Để code gọi Docker báo lỗi quen thuộc ("hãy mở Docker Desktop").
 
 
-def pch_include_args() -> list[str]:
+def pch_include_args(kind: str = "debug") -> list[str]:
     """Tham số `-I` trỏ tới header biên dịch sẵn của <bits/stdc++.h> (nếu có).
 
-    Thư mục được tạo lúc build image (xem Dockerfile) và khai báo bằng CPPFLOW_PCH_DIR.
+    Thư mục được tạo lúc build image (xem Dockerfile). PCH chỉ dùng được khi cờ biên dịch
+    khớp lúc tạo nên có 2 bộ: "debug" (CPPFLOW_PCH_DIR, cờ của debugger) và
+    "run" (CPPFLOW_PCH_RUN_DIR, cờ của nút Chạy C++).
     Chỉ có tác dụng khi `#include <bits/stdc++.h>` là dòng include đầu tiên của code;
     ngược lại, GCC tự dùng header gốc nên kết quả vẫn đúng, chỉ không nhanh hơn.
     """
-    directory = os.environ.get("CPPFLOW_PCH_DIR", "").strip()
+    name = "CPPFLOW_PCH_RUN_DIR" if kind == "run" else "CPPFLOW_PCH_DIR"
+    directory = os.environ.get(name, "").strip()
     if directory and (Path(directory) / "bits" / "stdc++.h.gch").is_file():
         return [f"-I{directory}"]
     return []

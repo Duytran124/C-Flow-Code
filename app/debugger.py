@@ -187,7 +187,7 @@ class DebugSession:
                 # (nếu thư viện lỗi thì bỏ qua, không làm hỏng phiên debug).
                 compile_script = (
                     "g++ -std=c++20 -g3 -O0 -fno-omit-frame-pointer -Wall -Wextra "
-                    "/work/main.cpp -o /work/main "
+                    "-I/opt/pch /work/main.cpp -o /work/main "
                     "&& { gcc -shared -fPIC -O0 /work/unbuf.c -o /work/unbuf.so "
                     "2>/dev/null || true; }"
                 )
