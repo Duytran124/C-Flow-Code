@@ -182,12 +182,17 @@ def run_limited(
     stderr_path: str | Path | None = None,
     fsize_mb: int = 50,
     nproc: int = 128,
+    usage: dict | None = None,
 ) -> tuple[int, bool]:
     """Chạy một lệnh với giới hạn tài nguyên; trả về (returncode, bị_quá_giờ).
 
     stdout/stderr ghi thẳng ra file (không qua bộ nhớ của server) nên chương trình
     in vô hạn cũng không làm đầy RAM: dung lượng file bị chặn bởi `--fsize`.
     returncode âm nghĩa là bị tín hiệu giết (ví dụ -11 = segfault).
+
+    Nếu truyền `usage` (một dict rỗng), hàm điền vào đó "cpuMs" (thời gian CPU thật của riêng
+    chương trình, user+sys) và "wallMs" (thời gian đồng hồ). cpuMs không bị kéo dài khi máy
+    chủ chậm hoặc bị giới hạn CPU, nên phản ánh đúng hơn chương trình chạy bao lâu.
     """
     stdin_handle = open(stdin_path, "rb") if stdin_path else subprocess.DEVNULL
     stdout_handle = open(stdout_path, "wb")
@@ -202,14 +207,30 @@ def run_limited(
             env=clean_env(str(cwd)),
             start_new_session=True,
         )
+        started = time.perf_counter()
         timed_out = False
-        try:
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
+        # Tự chờ bằng wait4 để lấy được mức dùng CPU của đúng tiến trình này
+        # (getrusage(CHILDREN) sẽ lẫn với các lượt chạy khác diễn ra cùng lúc).
+        deadline = time.monotonic() + timeout
+        delay = 0.0005
+        while True:
+            pid, status, rusage = os.wait4(proc.pid, os.WNOHANG)
+            if pid:
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                kill_group(proc)
+                _, status, rusage = os.wait4(proc.pid, 0)
+                break
+            time.sleep(delay)
+            delay = min(delay * 1.5, 0.004)
+        wall_ms = (time.perf_counter() - started) * 1000
+        proc.returncode = os.waitstatus_to_exitcode(status)  # âm = bị tín hiệu giết
+        if usage is not None:
+            usage["cpuMs"] = round((rusage.ru_utime + rusage.ru_stime) * 1000, 1)
+            usage["wallMs"] = round(wall_ms, 1)
         # Dù thoát bình thường hay quá giờ, luôn dọn cả nhóm tiến trình còn sót.
         kill_group(proc)
-        proc.wait()
         return proc.returncode, timed_out
     finally:
         for handle in (stdin_handle, stdout_handle, stderr_handle):

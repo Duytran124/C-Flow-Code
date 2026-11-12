@@ -1,5 +1,6 @@
 
 import os
+import re
 import signal
 import subprocess
 import tempfile
@@ -26,6 +27,8 @@ COMPILE_TIMEOUT_MARKER = "__CPP_FLOW_COMPILE_TIMEOUT__"
 COMPILE_ERROR_MARKER = "__CPP_FLOW_COMPILE_ERROR__"
 RUN_START_MARKER = "__CPP_FLOW_RUN_START__"
 RUN_TIMEOUT_MARKER = "__CPP_FLOW_RUN_TIMEOUT__"
+TIME_MARKER = "__CPP_FLOW_TIME__"
+_TIME_RE = re.compile(re.escape(TIME_MARKER) + r" ([0-9.,]+) ([0-9.,]+) ([0-9.,]+)\n?")
 
 
 class DockerUnavailable(RuntimeError):
@@ -97,6 +100,10 @@ def _run_direct(source: bytes, user_input: bytes) -> dict:
         compile_flags = ["-std=c++20", "-O0", "-Wall", "-Wextra"]
         cache_key = compile_cache.make_key(source, compile_flags)
 
+        run_usage: dict = {}
+        compile_started = time.perf_counter()
+        compile_ms = 0
+
         try:
             with sandbox.run_slot():
                 cached = compile_cache.get(cache_key)
@@ -140,6 +147,7 @@ def _run_direct(source: bytes, user_input: bytes) -> dict:
                     except OSError:
                         pass  # không lưu được bộ đệm thì thôi, lần sau biên dịch lại
 
+                compile_ms = round((time.perf_counter() - compile_started) * 1000)
                 run_status, run_timed_out = sandbox.run_limited(
                     ["./main"],
                     cwd=work,
@@ -151,6 +159,7 @@ def _run_direct(source: bytes, user_input: bytes) -> dict:
                     stderr_path=work / "stderr.txt",
                     fsize_mb=DIRECT_MAX_OUTPUT_MB,
                     nproc=64,
+                    usage=run_usage,
                 )
         except sandbox.Busy as exc:
             raise RunnerError(str(exc)) from exc
@@ -162,6 +171,13 @@ def _run_direct(source: bytes, user_input: bytes) -> dict:
         # Giống chế độ Docker: cảnh báo của trình biên dịch đứng trước stderr của chương trình.
         stderr = (compile_output + program_stderr) if compile_output else program_stderr
 
+        timing = {
+            "runMs": run_usage.get("cpuMs"),     # thời gian CPU thật của chương trình
+            "wallMs": run_usage.get("wallMs"),   # thời gian đồng hồ của riêng lượt chạy
+            "compileMs": compile_ms,
+            "cached": cached is not None,
+        }
+
         if run_timed_out:
             return {
                 "status": "error", "kind": "timeout",
@@ -169,8 +185,9 @@ def _run_direct(source: bytes, user_input: bytes) -> dict:
                 "stderr": _clip(
                     stderr.strip()
                     + f"\nĐã dừng chương trình sau {RUN_TIMEOUT_SECONDS} giây."
+                    + _slow_server_hint(run_usage.get("cpuMs"))
                 ),
-                "exitCode": None, "durationMs": elapsed_ms(),
+                "exitCode": None, "durationMs": elapsed_ms(), **timing,
             }
 
         exit_code = run_status
@@ -199,7 +216,19 @@ def _run_direct(source: bytes, user_input: bytes) -> dict:
             "stderr": _clip(stderr),
             "exitCode": exit_code,
             "durationMs": elapsed_ms(),
+            **timing,
         }
+
+
+def _slow_server_hint(cpu_ms: float | None) -> str:
+    """Khi quá giờ theo đồng hồ nhưng CPU thật dùng ít hơn nhiều, nhiều khả năng máy chủ chậm."""
+    if cpu_ms is None or cpu_ms >= RUN_TIMEOUT_SECONDS * 1000 * 0.6:
+        return ""
+    return (
+        f"\nChương trình thực sự chỉ dùng khoảng {round(cpu_ms)} ms thời gian CPU, "
+        "ít hơn nhiều so với thời gian chờ: máy chủ có thể đang chậm hoặc bận, "
+        "chưa chắc code của bạn bị TLE."
+    )
 
 
 def _run_docker(source: bytes, user_input: bytes) -> dict:
@@ -237,7 +266,9 @@ fi
 
 echo "{RUN_START_MARKER}"
 
-timeout {RUN_TIMEOUT_SECONDS}s \
+# `time` của bash báo thời gian CPU (user, sys) và thời gian đồng hồ của riêng chương trình.
+TIMEFORMAT="{TIME_MARKER} %3U %3S %3R"
+time timeout {RUN_TIMEOUT_SECONDS}s \
     /tmp/main < /input/input.txt
 
 run_status=$?
@@ -284,6 +315,20 @@ exit "$run_status"
         stdout = result.stdout
         stderr = result.stderr
 
+        # Lấy thời gian chạy thật của chương trình (do `time` trong container báo), rồi bỏ dòng đó khỏi stderr.
+        timing: dict = {}
+        match = _TIME_RE.search(stderr)
+        if match:
+            try:
+                user_s, sys_s, wall_s = (float(g.replace(",", ".")) for g in match.groups())
+                timing = {
+                    "runMs": round((user_s + sys_s) * 1000, 1),
+                    "wallMs": round(wall_s * 1000, 1),
+                }
+            except ValueError:
+                pass
+            stderr = stderr[:match.start()] + stderr[match.end():]
+
         # Phân biệt lỗi biên dịch với lỗi khi chạy.
         if COMPILE_TIMEOUT_MARKER in stderr:
             return {
@@ -323,9 +368,11 @@ exit "$run_status"
                 "stderr": _clip(
                     stderr
                     + f"\nĐã dừng chương trình sau {RUN_TIMEOUT_SECONDS} giây."
+                    + _slow_server_hint(timing.get("runMs"))
                 ),
                 "exitCode": None,
                 "durationMs": duration,
+                **timing,
             }
 
         success = result.returncode == 0
@@ -337,4 +384,5 @@ exit "$run_status"
             "stderr": _clip(stderr),
             "exitCode": result.returncode,
             "durationMs": duration,
+            **timing,
         }
