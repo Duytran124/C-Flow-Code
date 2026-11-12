@@ -273,6 +273,34 @@ $("reset-code").addEventListener("click", () => {
   $("stdin").value = exampleInputs[currentMode];
 });
 
+function formatMs(ms) {
+  if (ms == null || Number.isNaN(Number(ms))) return "—";
+  ms = Number(ms);
+  if (ms < 1) return "<1 ms";
+  if (ms < 10) return `${ms.toFixed(1)} ms`;
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
+// Hiện thời gian chạy THẬT của chương trình (thời gian CPU), tách khỏi thời gian biên dịch và độ trễ mạng.
+// Máy chủ miễn phí rất yếu nên tổng thời gian có thể lớn hơn nhiều so với thời gian chương trình thật sự chạy.
+function showDuration(data) {
+  const el = $("duration");
+  if (typeof data.runMs === "number") {
+    el.textContent = `Thời gian chạy: ${formatMs(data.runMs)}`;
+    const parts = [`Thời gian CPU của chương trình: ${formatMs(data.runMs)} (con số này không bị máy chủ chậm làm sai lệch).`];
+    if (typeof data.wallMs === "number") parts.push(`Thời gian đồng hồ khi chạy: ${formatMs(data.wallMs)}.`);
+    if (data.cached) parts.push("Bỏ qua biên dịch (dùng lại bản đã biên dịch).");
+    else if (typeof data.compileMs === "number") parts.push(`Biên dịch: ${formatMs(data.compileMs)}.`);
+    parts.push(`Tổng cả biên dịch và xử lý: ${formatMs(data.durationMs)}.`);
+    el.title = parts.join("\n");
+  } else {
+    // Lỗi biên dịch hoặc máy chủ cũ chưa báo thời gian chạy riêng.
+    el.textContent = data.kind === "compile" ? `Biên dịch: ${formatMs(data.durationMs)}` : `Tổng thời gian: ${formatMs(data.durationMs ?? 0)}`;
+    el.title = "";
+  }
+}
+
 function clearOutput() {
   $("stdout").textContent = "Kết quả chương trình sẽ xuất hiện ở đây.";
   $("stdout").classList.remove("empty");
@@ -281,7 +309,8 @@ function clearOutput() {
   $("result-badge").textContent = "Chưa chạy";
   $("result-badge").className = "result-badge neutral";
   $("exit-code").textContent = "Exit code: —";
-  $("duration").textContent = "Thời gian: —";
+  $("duration").textContent = "Thời gian chạy: —";
+  $("duration").title = "";
   $("run-state").textContent = "Chưa chạy";
 }
 $("clear-output").addEventListener("click", clearOutput);
@@ -341,7 +370,7 @@ $("run").addEventListener("click", async () => {
     $("result-badge").className = `result-badge ${data.status === "success" ? "success" : "error"}`;
     $("run-state").textContent = data.status === "success" ? "Chạy hoàn tất" : "Cần kiểm tra";
     $("exit-code").textContent = `Exit code: ${data.exitCode ?? "—"}`;
-    $("duration").textContent = `Thời gian: ${data.durationMs ?? 0} ms`;
+    showDuration(data);
   } catch (error) {
     $("stdout").textContent = "(không có output)";
     $("stderr").textContent = `Không gọi được API: ${error.message}`;
