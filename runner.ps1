@@ -21,6 +21,16 @@ if (-not $dockerOk) {
     exit 1
 }
 
+# Dung image rieng (gcc + gdb + ban bien dich san cua bits/stdc++.h) de chay code nhanh hon.
+# Lan dau mat vai phut (tai gcc va bien dich), cac lan sau gan nhu tuc thi vi da co cache.
+Write-Host "Dang chuan bi image Docker (lan dau co the mat vai phut)..."
+docker build -q -f Dockerfile.debug -t cpp-flow-debug:local . *> $null
+if ($LASTEXITCODE -eq 0) {
+    $env:CPPFLOW_RUN_IMAGE = "cpp-flow-debug:local"
+} else {
+    Write-Warning "Khong dung duoc image rieng, se dung gcc:14 (chay duoc nhung cham hon)."
+}
+
 $python = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) { $python = "python" }
 

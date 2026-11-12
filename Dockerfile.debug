@@ -4,4 +4,16 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gdb \
     && rm -rf /var/lib/apt/lists/*
 
+# Biên dịch sẵn <bits/stdc++.h> (precompiled header) để code dùng header này biên dịch nhanh hơn.
+# Có 2 bộ vì cờ biên dịch của debugger và của nút "Chạy C++" khác nhau
+# (cờ phải khớp lúc tạo thì GCC mới dùng được). File .h bọc ngoài chỉ chuyển tiếp tới header gốc.
+RUN mkdir -p /opt/pch/bits /opt/pch-run/bits \
+    && echo '#include_next <bits/stdc++.h>' > /opt/pch/bits/stdc++.h \
+    && cp /opt/pch/bits/stdc++.h /opt/pch-run/bits/stdc++.h \
+    && g++ -std=c++20 -g3 -O0 -fno-omit-frame-pointer -Wall -Wextra \
+        -x c++-header /opt/pch/bits/stdc++.h -o /opt/pch/bits/stdc++.h.gch \
+    && g++ -std=c++20 -O0 -Wall -Wextra \
+        -x c++-header /opt/pch-run/bits/stdc++.h -o /opt/pch-run/bits/stdc++.h.gch \
+    && chmod -R a+rX /opt/pch /opt/pch-run
+
 WORKDIR /work
