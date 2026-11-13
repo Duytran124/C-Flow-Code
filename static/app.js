@@ -277,7 +277,11 @@ $("reset-code").addEventListener("click", () => {
 
 // Chuyển giữa chế độ "Chạy" và "Debug": mỗi lúc chỉ hiện một chế độ.
 function setView(view) {
+  const previousView = $("workspace").dataset.view;
+  if (previousView !== "stress" && view === "stress") enterStress();
+  else if (previousView === "stress" && view !== "stress") leaveStress();
   $("workspace").dataset.view = view;
+  document.querySelectorAll(".hide-in-stress").forEach((element) => { element.hidden = view === "stress"; });
   document.querySelectorAll(".mode-btn").forEach((button) => {
     const active = button.dataset.view === view;
     button.classList.toggle("active", active);
@@ -944,3 +948,257 @@ async function loadSharedCode() {
   }
 }
 loadSharedCode();
+
+
+// ---------------------------------------------------------------
+// Tìm lỗi bằng random test: 3 chương trình (code của bạn / code đúng / generator)
+// dùng chung một ô soạn code, chuyển qua lại bằng các tab.
+// ---------------------------------------------------------------
+const BRUTE_HINT = `// Viết lời giải ĐƠN GIẢN nhưng CHẮC CHẮN ĐÚNG ở đây (chậm cũng được).
+// Thường là vét cạn: thử hết mọi khả năng rồi chọn kết quả tốt nhất.
+// Chương trình này đọc input và in output giống hệt đề bài.
+#include <bits/stdc++.h>
+using namespace std;
+
+int main() {
+    // ...
+}
+`;
+
+const GEN_HEAD = `#include <bits/stdc++.h>
+using namespace std;
+
+// Generator: sinh ra MỘT test. seed = số thứ tự test (1, 2, 3, ...), nên mỗi test khác nhau.
+// Giữ giới hạn nhỏ (n <= 8, giá trị nhỏ) để test lỗi dễ đọc.
+int main(int argc, char* argv[]) {
+    int seed = atoi(argv[1]);
+    mt19937 rng(seed);
+    auto rnd = [&](int l, int r) { return (int)(rng() % (r - l + 1)) + l; };
+
+`;
+
+const GEN_TEMPLATES = {
+  array: GEN_HEAD + `    int n = rnd(1, 8);              // sửa giới hạn n
+    cout << n << "\\n";
+    for (int i = 0; i < n; i++) cout << rnd(-10, 10) << " ";   // sửa khoảng giá trị
+    cout << "\\n";
+}
+`,
+  query: GEN_HEAD + `    int n = rnd(1, 8), q = rnd(1, 5);
+    cout << n << " " << q << "\\n";
+    for (int i = 0; i < n; i++) cout << rnd(1, 20) << " ";
+    cout << "\\n";
+    while (q--) {
+        int l = rnd(1, n), r = rnd(1, n);
+        if (l > r) swap(l, r);
+        cout << l << " " << r << "\\n";
+    }
+}
+`,
+  two: GEN_HEAD + `    cout << rnd(1, 30) << " " << rnd(1, 30) << "\\n";   // sửa khoảng giá trị a, b
+}
+`,
+  string: GEN_HEAD + `    int n = rnd(1, 8);
+    string s;
+    for (int i = 0; i < n; i++) s += char('a' + rnd(0, 2));   // chỉ dùng 3 chữ a, b, c
+    cout << s << "\\n";
+}
+`,
+  graph: GEN_HEAD + `    int n = rnd(2, 6), m = rnd(1, 8);
+    cout << n << " " << m << "\\n";
+    for (int i = 0; i < m; i++) {
+        int u = rnd(1, n), v = rnd(1, n);
+        cout << u << " " << v << "\\n";
+    }
+}
+`,
+};
+
+const STRESS_HINTS = {
+  mine: "Code đang bị sai, cần kiểm tra.",
+  brute: "Lời giải chậm nhưng chắc chắn đúng (vét cạn). Phải đọc/in giống code của bạn.",
+  gen: "Đọc seed từ argv[1] và in ra một test hợp lệ theo đề bài.",
+};
+
+const stressState = {tab: "mine", buffers: {mine: "", brute: BRUTE_HINT, gen: GEN_TEMPLATES.array}, preCode: "", running: false};
+
+function paintStressTabs() {
+  document.querySelectorAll(".stress-tab").forEach((button) => {
+    const active = button.dataset.tab === stressState.tab;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  $("gen-template-wrap").hidden = stressState.tab !== "gen";
+  $("stress-tab-hint").textContent = STRESS_HINTS[stressState.tab];
+}
+
+function loadEditorText(text) {
+  $("code").value = text;
+  $("code").scrollTop = 0;
+  updateCodeHighlight();
+  updateLineCount();
+}
+
+function enterStress() {
+  stressState.tab = "mine";
+  stressState.preCode = $("code").value;
+  paintStressTabs();
+}
+
+function leaveStress() {
+  stressState.buffers[stressState.tab] = $("code").value;
+  const mine = stressState.buffers.mine;
+  stressState.tab = "mine";
+  loadEditorText(mine);
+  if (mine !== stressState.preCode && typeof markDebugSourceChanged === "function") markDebugSourceChanged();
+}
+
+function switchStressTab(tab) {
+  if (tab === stressState.tab) return;
+  stressState.buffers[stressState.tab] = $("code").value;
+  stressState.tab = tab;
+  loadEditorText(stressState.buffers[tab]);
+  paintStressTabs();
+}
+
+document.querySelectorAll(".stress-tab").forEach((button) => {
+  button.addEventListener("click", () => switchStressTab(button.dataset.tab));
+});
+
+$("gen-template").addEventListener("change", () => {
+  if (stressState.tab !== "gen") return;
+  loadEditorText(GEN_TEMPLATES[$("gen-template").value]);
+});
+
+function stressEl(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function stressBlock(label, text, extraClass = "") {
+  const wrap = document.createElement("div");
+  wrap.appendChild(stressEl("div", "stress-block-label", label));
+  wrap.appendChild(stressEl("pre", `stress-pre ${extraClass}`.trim(), text === "" ? "(trống)" : text));
+  return wrap;
+}
+
+function setStressBadge(text, cls) {
+  $("stress-badge").textContent = text;
+  $("stress-badge").className = `result-badge ${cls}`;
+}
+
+function useInputFromStress(input, view) {
+  $("stdin").value = input;
+  setView(view);
+  showToast(view === "debug" ? "Đã nạp input lỗi. Bấm Bắt đầu debug." : "Đã nạp input lỗi vào ô Input.");
+}
+
+const STRESS_WHICH = {mine: "Code của bạn", brute: "Code đúng", gen: "Generator"};
+
+function renderStressResult(data) {
+  const box = $("stress-result");
+  box.textContent = "";
+
+  if (data.status === "ok") {
+    setStressBadge("Không thấy lỗi", "success");
+    box.appendChild(stressEl("p", "stress-verdict ok", `Không có khác biệt trong ${data.tests} test.`));
+    box.appendChild(stressEl("p", "muted-text", data.timeLimited
+      ? "Đã dừng sớm vì hết thời gian cho phép. Có thể thử lại để chạy thêm test khác, hoặc rút gọn generator."
+      : "Chưa tìm ra test sai không có nghĩa là code chắc chắn đúng. Thử thêm giá trị đặc biệt (n = 1, số âm, số bằng nhau…) trong generator."));
+    return;
+  }
+
+  if (data.status === "found") {
+    const labels = {
+      wrong_answer: "Đáp án khác code đúng",
+      runtime: "Code của bạn bị lỗi khi chạy",
+      timeout: "Code của bạn chạy quá lâu",
+    };
+    setStressBadge("Tìm thấy lỗi", "error");
+    box.appendChild(stressEl("p", "stress-verdict bad", `${labels[data.kind] || "Có lỗi"} ở test #${data.seed}`));
+    if (data.message) box.appendChild(stressEl("p", "muted-text", data.message));
+    box.appendChild(stressBlock("Input của test lỗi", data.input || ""));
+    const cols = stressEl("div", "stress-cols");
+    cols.appendChild(stressBlock("Code của bạn in ra", data.mine || "", "bad"));
+    cols.appendChild(stressBlock("Code đúng in ra", data.brute || "", "good"));
+    box.appendChild(cols);
+    if (data.stderr) box.appendChild(stressBlock("Thông báo lỗi", data.stderr, "bad"));
+
+    const actions = stressEl("div", "stress-actions");
+    const copy = stressEl("button", "text-button", "Chép input");
+    copy.type = "button";
+    copy.addEventListener("click", async () => showToast((await copyText(data.input || "")) ? "Đã chép input." : "Không chép được.", false));
+    const run = stressEl("button", "share-button", "Chạy với input này");
+    run.type = "button";
+    run.addEventListener("click", () => useInputFromStress(data.input || "", "run"));
+    const debug = stressEl("button", "share-button", "Debug với input này");
+    debug.type = "button";
+    debug.addEventListener("click", () => useInputFromStress(data.input || "", "debug"));
+    actions.append(run, debug, copy);
+    box.appendChild(actions);
+    return;
+  }
+
+  // Các lỗi khác: biên dịch, generator, code đúng, môi trường...
+  setStressBadge("Có lỗi", "error");
+  const whichName = STRESS_WHICH[data.which] || "";
+  const titles = {
+    compile: `Lỗi biên dịch ${whichName ? `(tab ${whichName})` : ""}`,
+    generator: `Generator bị lỗi ở seed ${data.seed ?? ""}`,
+    brute: `Code đúng bị lỗi ở test #${data.seed ?? ""}`,
+    missing: `Chưa có ${whichName.toLowerCase()}`,
+  };
+  box.appendChild(stressEl("p", "stress-verdict bad", titles[data.kind] || "Không chạy được"));
+  if (data.message) box.appendChild(stressEl("pre", "stress-pre bad", data.message));
+  if (data.input) box.appendChild(stressBlock("Input lúc đó", data.input));
+  if (data.stderr) box.appendChild(stressBlock("Thông báo lỗi", data.stderr, "bad"));
+  if (data.kind === "compile" && data.which) {
+    const go = stressEl("button", "share-button", `Mở tab ${whichName}`);
+    go.type = "button";
+    go.addEventListener("click", () => switchStressTab(data.which));
+    box.appendChild(go);
+  }
+}
+
+$("stress-run").addEventListener("click", async () => {
+  if (stressState.running) return;
+  stressState.buffers[stressState.tab] = $("code").value;
+  const {mine, brute, gen} = stressState.buffers;
+
+  if (!mine.trim()) { showToast("Tab “Code của bạn” đang trống.", true); switchStressTab("mine"); return; }
+  if (brute.trim() === BRUTE_HINT.trim() || !brute.trim()) {
+    showToast("Hãy viết lời giải đúng ở tab “Code đúng” trước.", true);
+    switchStressTab("brute");
+    return;
+  }
+
+  stressState.running = true;
+  $("stress-run").disabled = true;
+  $("stress-run-label").textContent = "Đang thử các test…";
+  setStressBadge("Đang chạy", "neutral");
+  $("stress-result").textContent = "";
+  $("stress-result").appendChild(stressEl("p", "muted-text", "Đang biên dịch và chạy các test. Có thể mất tới ~20 giây…"));
+
+  try {
+    const response = await fetch("/api/stress", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mine, brute, gen, tests: Number($("stress-tests").value)}),
+    });
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail ? JSON.stringify(detail.detail) : `HTTP ${response.status}`);
+    }
+    renderStressResult(await response.json());
+  } catch (error) {
+    setStressBadge("Lỗi kết nối", "error");
+    $("stress-result").textContent = "";
+    $("stress-result").appendChild(stressEl("p", "stress-verdict bad", `Không gọi được API: ${error.message}`));
+  } finally {
+    stressState.running = false;
+    $("stress-run").disabled = false;
+    $("stress-run-label").textContent = "Tìm lỗi";
+  }
+});
