@@ -36,6 +36,10 @@
         </select>
       </label>
       <div class="spacer"></div>
+      <button type="button" id="share-code" class="share-button" title="Sao chép link chứa code và input">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="3.5" cy="7" r="1.8"/><circle cx="10.5" cy="3" r="1.8"/><circle cx="10.5" cy="11" r="1.8"/><path d="M5.2 6.1 8.8 3.9M5.2 7.9l3.6 2.2"/></svg>
+        Chia sẻ
+      </button>
       <button type="button" id="reset-code" class="text-button">Khôi phục ví dụ</button>
     </div>
 
@@ -145,6 +149,7 @@
 
     <footer><span>C++ Flow</span><span>Code được gửi tới máy chủ để chạy. Đừng nhập thông tin nhạy cảm.</span></footer>
   </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script src="/static/app.js"></script>
 </body>
 </html>

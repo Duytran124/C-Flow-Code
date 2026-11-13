@@ -835,3 +835,112 @@ $("debug-speed").addEventListener("change", () => {
     scheduleAutoStep();
   }
 });
+
+// ---------------------------------------------------------------
+// Chia sẻ code bằng link: code + input được nén rồi nhét vào phần
+// sau dấu # của URL. Không lưu gì trên máy chủ, nên link không hết hạn.
+// ---------------------------------------------------------------
+const SHARE_MAX_URL = 12000;
+
+function bytesToB64Url(bytes) {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function b64UrlToBytes(text) {
+  const padded = text.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (text.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function pipeThrough(bytes, stream) {
+  const result = new Response(new Blob([bytes]).stream().pipeThrough(stream));
+  return new Uint8Array(await result.arrayBuffer());
+}
+
+async function encodeShare(payload) {
+  const raw = new TextEncoder().encode(JSON.stringify(payload));
+  if (typeof CompressionStream === "function") {
+    try {
+      return "z" + bytesToB64Url(await pipeThrough(raw, new CompressionStream("deflate-raw")));
+    } catch (error) { /* dùng bản không nén */ }
+  }
+  return "p" + bytesToB64Url(raw);
+}
+
+async function decodeShare(text) {
+  const kind = text[0];
+  let bytes = b64UrlToBytes(text.slice(1));
+  if (kind === "z") bytes = await pipeThrough(bytes, new DecompressionStream("deflate-raw"));
+  else if (kind !== "p") throw new Error("định dạng không hợp lệ");
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+let toastTimer = null;
+function showToast(message, isError = false) {
+  const toast = $("toast");
+  toast.textContent = message;
+  toast.classList.toggle("error", isError);
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, 3200);
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch (error) {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    area.remove();
+    return ok;
+  }
+}
+
+$("share-code").addEventListener("click", async () => {
+  const payload = {c: $("code").value, i: $("stdin").value, v: $("workspace").dataset.view === "debug" ? "debug" : "run"};
+  if (!payload.c.trim()) { showToast("Chưa có code để chia sẻ.", true); return; }
+  try {
+    const encoded = await encodeShare(payload);
+    const url = `${location.origin}${location.pathname}#${encoded}`;
+    if (url.length > SHARE_MAX_URL) {
+      showToast("Code quá dài để chia sẻ bằng link. Hãy rút gọn code lại.", true);
+      return;
+    }
+    history.replaceState(null, "", `#${encoded}`);
+    showToast((await copyText(url)) ? "Đã sao chép link chia sẻ!" : "Không tự sao chép được. Hãy copy link trên thanh địa chỉ.", false);
+  } catch (error) {
+    showToast("Không tạo được link chia sẻ.", true);
+  }
+});
+
+async function loadSharedCode() {
+  const hash = location.hash.replace(/^#/, "");
+  if (!hash || !/^[zp][A-Za-z0-9_-]+$/.test(hash)) return;
+  try {
+    const payload = await decodeShare(hash);
+    if (typeof payload.c !== "string") throw new Error("thiếu code");
+    $("code").value = payload.c;
+    $("stdin").value = typeof payload.i === "string" ? payload.i : "";
+    updateCodeHighlight();
+    updateLineCount();
+    if (typeof setView === "function" && payload.v === "debug") setView("debug");
+    showToast("Đã mở code được chia sẻ.");
+  } catch (error) {
+    showToast("Link chia sẻ bị hỏng hoặc không đọc được.", true);
+  }
+}
+loadSharedCode();
