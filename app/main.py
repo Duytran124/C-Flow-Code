@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from app import remote, sandbox
 from app.runner import run_cpp, DockerUnavailable, RunnerError
+from app.stress import run_stress
 from app.debugger import (
     DebuggerError,
     DockerUnavailable as DebugDockerUnavailable,
@@ -97,6 +98,13 @@ class DebugRequest(BaseModel):
     input: str = Field(default="", max_length=20_000)
 
 
+class StressRequest(BaseModel):
+    mine: str = Field(max_length=100_000)
+    brute: str = Field(max_length=100_000)
+    gen: str = Field(max_length=100_000)
+    tests: int = Field(default=200, ge=1, le=1000)
+
+
 class StepRequest(BaseModel):
     into: bool = False
 
@@ -173,6 +181,26 @@ def run(request: RunRequest, http_request: Request):
             "status": "error", "kind": "runner", "stdout": "",
             "stderr": str(exc), "exitCode": None, "durationMs": 0,
         }
+
+
+@app.post("/api/stress")
+def stress(request: StressRequest, http_request: Request):
+    if _rate_limited(http_request):
+        return {"status": "error", "kind": "rate_limit", "message": RATE_LIMIT_MESSAGE}
+    if remote.enabled() and remote.available():
+        try:
+            status, data = remote.post("/api/stress", request.model_dump(), remote.RUN_TIMEOUT)
+            if status == 200 and isinstance(data, dict) and data.get("kind") != "environment":
+                data["via"] = "remote"
+                return data
+        except remote.RemoteUnavailable:
+            pass  # runner tắt: dự phòng chạy trực tiếp trên máy chủ này
+    try:
+        return run_stress(request.mine, request.brute, request.gen, request.tests)
+    except DockerUnavailable as exc:
+        return {"status": "error", "kind": "environment", "message": str(exc)}
+    except RunnerError as exc:
+        return {"status": "error", "kind": "runner", "message": str(exc)}
 
 
 @app.post("/api/debug/start")
