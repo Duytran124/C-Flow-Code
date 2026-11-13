@@ -128,3 +128,11 @@ cpp-flow/
 - `docker` permission/connection error: check Docker Desktop settings and current user permissions.
 - Compile errors appear in the error panel.
 - Infinite loops are stopped by a timeout.
+
+## Debug (v8)
+
+- Biến chỉ hiện khi đã tới dòng khai báo (dùng GDB Python); biến vừa tới dòng khai báo hiện "(chưa khởi tạo)".
+- Ẩn biến do trình biên dịch tạo (`__for_range`, ...), rút gọn tên kiểu (`vector<int>` thay vì `std::vector<int, std::allocator<int> >`).
+- vector lồng nhau (`vector<vector<int>>`) hiện dạng bảng; vector rỗng hiện `[]`.
+- "Vào hàm" không chui vào ruột thư viện chuẩn; không dừng 2 lần ở dấu `}` kết thúc hàm.
+- Lỗi runtime (segfault...) hiện thông báo ngay tại dòng gây lỗi.
