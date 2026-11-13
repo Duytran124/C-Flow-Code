@@ -136,3 +136,9 @@ cpp-flow/
 - vector lồng nhau (`vector<vector<int>>`) hiện dạng bảng; vector rỗng hiện `[]`.
 - "Vào hàm" không chui vào ruột thư viện chuẩn; không dừng 2 lần ở dấu `}` kết thúc hàm.
 - Lỗi runtime (segfault...) hiện thông báo ngay tại dòng gây lỗi.
+
+### Debug (v9)
+
+- Vòng lặp viết trên một dòng (`for (...) cin >> a[i];`) giờ dừng ở mỗi vòng lặp thay vì chạy hết một lần.
+- Dòng chỉ khai báo không khởi tạo (`int n;`, `int a[N], cnt[N];`) không có mã máy nên GDB bỏ qua; web tạo "điểm dừng ảo" để vẫn hiện ra.
+- Mảng rất lớn (`int a[1000005]`) đọc nhanh (trước đây mỗi bước mất ~14 giây) và mảng toàn cục lớn không còn bị mất khỏi danh sách biến.
