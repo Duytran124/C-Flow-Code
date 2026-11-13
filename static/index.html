@@ -3,136 +3,147 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0b1020" />
-  <title>C++ Flow — Local</title>
+  <meta name="theme-color" content="#0b0b12" />
+  <title>C++ Flow</title>
   <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
       <div class="brand">
-        <div class="brand-icon">C<span>++</span></div>
+        <div class="brand-icon">C</div>
         <div><h1>C++ Flow</h1><p>Code. Run. Understand.</p></div>
       </div>
-      <div class="local-status"><span class="status-dot"></span> Chạy C++ thật</div>
+      <div class="backend-pill" id="backend-status"><span class="status-dot"></span> Đang kiểm tra…</div>
     </header>
 
-    <main>
-      <section class="welcome">
-        <div>
-          <p class="eyebrow">C++ VISUALIZER</p>
-          <h2>Hiểu code theo từng bước.</h2>
-          <p class="subheading">Chạy C++ thật và dùng GDB để theo dõi từng bước thực thi.</p>
+    <div class="toolbar">
+      <div class="mode-switch" role="group" aria-label="Chế độ">
+        <button type="button" class="mode-btn active" data-view="run" aria-pressed="true">
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5v9l7-4.5z" fill="currentColor"/></svg>
+          Chạy
+        </button>
+        <button type="button" class="mode-btn" data-view="debug" aria-pressed="false">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7" cy="8" r="3.5"/><path d="M7 4.5V2M3.5 8H1.5M12.5 8h-2M4 5 2.5 3.5M10 5l1.5-1.5"/></svg>
+          Debug
+        </button>
+      </div>
+      <label class="select-label">Mẫu code
+        <select id="example-select">
+          <option value="normal">Mặc định</option>
+          <option value="graph">Đồ thị</option>
+          <option value="tree">Cây</option>
+        </select>
+      </label>
+      <div class="spacer"></div>
+      <button type="button" id="reset-code" class="text-button">Khôi phục ví dụ</button>
+    </div>
+
+    <main class="workspace" id="workspace" data-view="run">
+      <section class="panel editor-panel" aria-label="Code">
+        <div class="panel-heading">
+          <div class="panel-title"><span class="file-dot"></span><strong>main.cpp</strong><span class="file-tag">C++20</span></div>
+          <div class="debug-only heading-right">
+            <span id="debug-line-label" class="line-label">Dòng: —</span>
+            <span id="debug-badge" class="result-badge neutral">Chưa bắt đầu</span>
+          </div>
         </div>
-        <div class="backend-pill" id="backend-status"><span class="status-dot"></span> Đang kiểm tra backend…</div>
+
+        <div class="debug-toolbar debug-only">
+          <button type="button" id="debug-start" class="debug-button primary">▶ Bắt đầu debug</button>
+          <button type="button" id="debug-step" class="debug-button" disabled>→ Tiến bước</button>
+          <button type="button" id="debug-into" class="debug-button" disabled>↳ Vào hàm</button>
+          <button type="button" id="debug-pause" class="debug-button" disabled>Ⅱ Tạm dừng</button>
+          <button type="button" id="debug-stop" class="debug-button danger" disabled>■ Dừng</button>
+          <label class="select-label speed-label">Tốc độ
+            <select id="debug-speed" class="small-select" disabled>
+              <option value="50">50 ms</option>
+              <option value="500" selected>500 ms</option>
+              <option value="2000">2000 ms</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="sr-only" for="code">Mã nguồn C++</label>
+        <div class="code-editor">
+          <pre id="line-numbers" aria-hidden="true"></pre>
+          <pre id="code-highlight" aria-hidden="true"></pre>
+          <textarea
+            id="code"
+            spellcheck="false"
+            autocapitalize="off"
+            autocomplete="off"
+            autocorrect="off"
+            wrap="off"
+          ></textarea>
+        </div>
+        <div class="debug-source-wrap">
+          <pre id="debug-source" class="debug-source"><span class="source-placeholder">Dòng đang thực thi sẽ được tô sáng tại đây.</span></pre>
+        </div>
+
+        <div class="editor-footer run-only">
+          <span id="line-count">0 dòng</span>
+          <span>UTF-8 · C++20</span>
+        </div>
+        <div class="editor-footer debug-only">
+          <span id="debug-status" class="debug-status">Bắt đầu debug để dừng ở dòng đầu tiên trong main().</span>
+        </div>
       </section>
 
-      <nav class="mode-tabs" aria-label="Chế độ">
-        <button class="mode-tab active" data-mode="normal"><span>⌘</span> Code thường</button>
-        <button class="mode-tab" data-mode="graph"><span>◎</span> Đồ thị</button>
-        <button class="mode-tab" data-mode="tree"><span>⌁</span> Cây</button>
-      </nav>
-
-      <section class="workspace">
-        <div class="panel editor-panel">
-          <div class="panel-heading">
-            <div class="panel-title"><span class="file-dot"></span><strong>main.cpp</strong><span class="file-tag">C++20</span></div>
-            <button class="text-button" id="reset-code">Khôi phục ví dụ</button>
-          </div>
-          <label class="sr-only" for="code">Mã nguồn C++</label>
-          <div class="code-editor">
-            <pre id="code-highlight" aria-hidden="true"></pre>
-            <textarea
-              id="code"
-              spellcheck="false"
-              autocapitalize="off"
-              autocomplete="off"
-              autocorrect="off"
-              wrap="off"
-            ></textarea>
-          </div>
-          <div class="editor-footer">
-            <span id="line-count">0 dòng</span>
-            <span>UTF-8 · C++20</span>
-          </div>
-        </div>
-
-        <aside class="side-column">
-          <div class="panel input-panel">
-            <div class="panel-heading"><div class="panel-title"><strong>Input</strong><span class="muted">stdin</span></div><span class="step-number">01</span></div>
+      <aside class="side-column">
+        <div class="side-stack run-only">
+          <section class="panel input-panel" aria-label="Input">
+            <div class="panel-heading">
+              <div class="panel-title"><strong>Input</strong><span class="muted">stdin, đọc bằng cin</span></div>
+            </div>
             <label class="sr-only" for="stdin">Input chương trình</label>
             <textarea id="stdin" class="input-editor" spellcheck="false" placeholder="Nhập dữ liệu đầu vào…">5</textarea>
-            <p class="hint">Dữ liệu được truyền vào qua cin.</p>
-          </div>
-          <div class="run-card">
-            <div><strong>Sẵn sàng chạy?</strong><p>Code sẽ được biên dịch và chạy trên máy chủ.</p></div>
-            <button id="run" class="run-button"><span class="play-icon">▶</span><span id="run-label">Chạy C++</span></button>
-            <div class="run-meta"><span id="run-state">Chưa chạy</span><span>Giới hạn 5 giây</span></div>
-          </div>
-        </aside>
-      </section>
+          </section>
 
-      <section class="panel debug-panel">
-        <div class="panel-heading">
-          <div class="panel-title"><strong>Debugger từng bước</strong><span id="debug-badge" class="result-badge neutral">Chưa bắt đầu</span></div>
-          <span class="muted">GDB · chạy C++ thật</span>
-        </div>
-        <div class="debug-toolbar">
-          <button id="debug-start" class="debug-button primary">▶ Bắt đầu debug</button>
-          <div class="speed-group" role="group" aria-label="Tốc độ tự chạy">
-            <span class="speed-label">Tốc độ</span>
-            <button class="speed-option" data-speed="50">50 ms</button>
-            <button class="speed-option active" data-speed="500">500 ms</button>
-            <button class="speed-option" data-speed="2000">2000 ms</button>
+          <div class="run-block">
+            <button type="button" id="run" class="run-button">
+              <svg width="13" height="13" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5v9l7-4.5z" fill="currentColor"/></svg>
+              <span id="run-label">Chạy C++</span>
+            </button>
+            <div class="run-hint"><span id="run-state">Chưa chạy</span> · Giới hạn 5 giây</div>
           </div>
-          <button id="debug-pause" class="debug-button" disabled>Ⅱ Tạm dừng</button>
-          <button id="debug-step" class="debug-button" disabled>→ Tiến bước</button>
-          <button id="debug-into" class="debug-button" disabled>↳ Vào hàm</button>
-          <button id="debug-stop" class="debug-button danger" disabled>■ Dừng</button>
-        </div>
-        <div class="debug-status-row"><span id="debug-status">Bắt đầu debug để dừng ở dòng đầu tiên trong main().</span><span id="debug-line-label">Dòng: —</span></div>
-        <div class="debug-grid">
-          <div class="debug-subpanel source-panel">
-            <div class="debug-subheading">Mã nguồn đang chạy</div>
-            <pre id="debug-source" class="debug-source"><span class="source-placeholder">Dòng đang thực thi sẽ được tô sáng tại đây.</span></pre>
-          </div>
-          <div class="debug-inspector">
-            <div class="debug-subpanel">
-              <div class="debug-subheading">Biến hiện tại</div>
-              <div id="debug-variables" class="debug-table-empty">Chưa có dữ liệu biến.</div>
-            </div>
-            <div class="debug-subpanel">
-              <div class="debug-subheading">Mảng &amp; vector</div>
-              <div id="debug-arrays" class="debug-table-empty">Chưa tìm thấy mảng hoặc vector.</div>
-            </div>
-            <div class="debug-subpanel">
-              <div class="debug-subheading">Call stack</div>
-              <div id="debug-stack" class="debug-table-empty">Chưa có lời gọi hàm.</div>
-            </div>
-          </div>
-        </div>
-        <div class="debug-output-wrap"><div class="debug-subheading">Output trong lúc debug</div><pre id="debug-output" class="debug-output">Chưa có output.</pre></div>
-        <p class="debug-note">Tiến bước chạy tới dòng nguồn tiếp theo; “Vào hàm” đi vào hàm được gọi. Một số biến phức tạp của STL có thể hiển thị rút gọn.</p>
-      </section>
 
-      <section class="panel output-panel">
-        <div class="panel-heading output-heading">
-          <div class="panel-title"><strong>Kết quả</strong><span id="result-badge" class="result-badge neutral">Chưa chạy</span></div>
-          <button id="clear-output" class="text-button">Xóa kết quả</button>
+          <section class="panel result-panel" aria-label="Kết quả">
+            <div class="panel-heading">
+              <div class="panel-title"><strong>Kết quả</strong><span id="result-badge" class="result-badge neutral">Chưa chạy</span></div>
+              <button type="button" id="clear-output" class="text-button">Xóa kết quả</button>
+            </div>
+            <div class="result-body">
+              <div class="output-section"><div class="output-label"><span class="output-mark success-mark"></span> STDOUT</div><pre id="stdout" class="output-content">Kết quả chương trình sẽ xuất hiện ở đây.</pre></div>
+              <div class="output-section"><div class="output-label"><span class="output-mark error-mark"></span> STDERR / LỖI</div><pre id="stderr" class="output-content empty">Chưa có lỗi.</pre></div>
+            </div>
+            <div class="output-footer"><span id="exit-code">Exit code: —</span><span id="duration">Thời gian chạy: —</span></div>
+          </section>
         </div>
-        <div class="output-grid">
-          <div class="output-section"><div class="output-label"><span class="output-mark success-mark"></span> STDOUT</div><pre id="stdout" class="output-content">Kết quả chương trình sẽ xuất hiện ở đây.</pre></div>
-          <div class="output-section"><div class="output-label"><span class="output-mark error-mark"></span> STDERR / LỖI</div><pre id="stderr" class="output-content empty">Chưa có lỗi.</pre></div>
-        </div>
-        <div class="output-footer"><span id="exit-code">Exit code: —</span><span id="duration">Thời gian chạy: —</span></div>
-      </section>
 
-      <section class="roadmap">
-        <div class="roadmap-icon">✦</div>
-        <div><strong>Đang xây dựng theo từng giai đoạn</strong><p id="mode-description">Dùng Debugger từng bước để theo dõi dòng hiện tại, biến và call stack. Các tab Đồ thị/Cây hiện vẫn là ví dụ C++ thông thường.</p></div>
-      </section>
+        <div class="side-stack debug-only">
+          <section class="panel" aria-label="Biến hiện tại">
+            <div class="panel-heading"><div class="panel-title"><strong>Biến hiện tại</strong></div></div>
+            <div class="scroll-box"><div id="debug-variables" class="debug-table-empty">Chưa có dữ liệu biến.</div></div>
+          </section>
+          <section class="panel" id="debug-arrays-panel" aria-label="Mảng và vector" hidden>
+            <div class="panel-heading"><div class="panel-title"><strong>Mảng &amp; vector</strong></div></div>
+            <div class="scroll-box tall"><div id="debug-arrays" class="debug-table-empty">Chưa tìm thấy mảng hoặc vector.</div></div>
+          </section>
+          <section class="panel" aria-label="Call stack">
+            <div class="panel-heading"><div class="panel-title"><strong>Call stack</strong></div></div>
+            <div class="scroll-box"><div id="debug-stack" class="debug-table-empty">Chưa có lời gọi hàm.</div></div>
+          </section>
+          <section class="panel output-debug-panel" aria-label="Output trong lúc debug">
+            <div class="panel-heading"><div class="panel-title"><strong>Output</strong></div></div>
+            <pre id="debug-output" class="debug-output">Chưa có output.</pre>
+          </section>
+          <p class="hint" id="debug-arrays-hint">Khung “Mảng &amp; vector” sẽ tự hiện thêm ở đây khi code có mảng hoặc vector.</p>
+        </div>
+      </aside>
     </main>
-    <footer><span>C++ Flow <span class="footer-dot">•</span> MVP</span><span>Code được gửi tới máy chủ để chạy. Đừng nhập thông tin nhạy cảm.</span></footer>
+
+    <footer><span>C++ Flow</span><span>Code được gửi tới máy chủ để chạy. Đừng nhập thông tin nhạy cảm.</span></footer>
   </div>
   <script src="/static/app.js"></script>
 </body>

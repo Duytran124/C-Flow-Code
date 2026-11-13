@@ -149,6 +149,8 @@ const cppHighlight = (() => {
   return {highlight};
 })();
 
+let renderedLineCount = 0;
+
 function updateCodeHighlight() {
   const editor = $("code");
   const highlight = $("code-highlight");
@@ -157,6 +159,14 @@ function updateCodeHighlight() {
   highlight.innerHTML = cppHighlight.highlight(editor.value);
   highlight.scrollTop = editor.scrollTop;
   highlight.scrollLeft = editor.scrollLeft;
+
+  // Cột số dòng bên trái ô soạn code (chỉ dựng lại khi số dòng thay đổi).
+  const lineCount = editor.value.split("\n").length;
+  if (lineCount !== renderedLineCount) {
+    renderedLineCount = lineCount;
+    $("line-numbers").textContent = Array.from({length: lineCount}, (_, i) => i + 1).join("\n");
+  }
+  $("line-numbers").scrollTop = editor.scrollTop;
 }
 
 $("code").addEventListener("input", updateCodeHighlight);
@@ -165,6 +175,7 @@ $("code").addEventListener("scroll", () => {
   const highlight = $("code-highlight");
   highlight.scrollTop = $("code").scrollTop;
   highlight.scrollLeft = $("code").scrollLeft;
+  $("line-numbers").scrollTop = $("code").scrollTop;
 });
 
 const examples = {
@@ -245,24 +256,15 @@ $("code").addEventListener("keydown", (event) => {
   editor.dispatchEvent(new Event("input", {bubbles: true}));
 });
 
-document.querySelectorAll(".mode-tab").forEach((button) => {
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".mode-tab").forEach((b) => b.classList.remove("active"));
-    button.classList.add("active");
-    currentMode = button.dataset.mode;
-    const descriptions = {
-      normal: "Dùng Debugger từng bước để theo dõi dòng hiện tại, biến và call stack. Các tab Đồ thị/Cây hiện vẫn là ví dụ C++ thông thường.",
-      graph: "Chế độ Đồ thị hiện có ví dụ code C++ để chạy. Vẽ đỉnh/cạnh và đồng bộ BFS, DFS, Dijkstra sẽ được bổ sung ở giai đoạn sau.",
-      tree: "Chế độ Cây hiện có ví dụ code C++ để chạy. Vẽ nút và đồng bộ thao tác Segment Tree/Fenwick Tree sẽ được bổ sung ở giai đoạn sau."
-    };
-    $("mode-description").textContent = descriptions[currentMode];
-    $("code").value = examples[currentMode];
-    updateCodeHighlight();
-    updateLineCount();
-    if (typeof markDebugSourceChanged === "function") markDebugSourceChanged();
-    $("stdin").value = exampleInputs[currentMode];
-    clearOutput();
-  });
+// Ô chọn "Mẫu code": nạp ví dụ Mặc định / Đồ thị / Cây (hiện vẫn là code C++ thông thường).
+$("example-select").addEventListener("change", () => {
+  currentMode = $("example-select").value;
+  $("code").value = examples[currentMode];
+  updateCodeHighlight();
+  updateLineCount();
+  if (typeof markDebugSourceChanged === "function") markDebugSourceChanged();
+  $("stdin").value = exampleInputs[currentMode];
+  clearOutput();
 });
 
 $("reset-code").addEventListener("click", () => {
@@ -271,6 +273,21 @@ $("reset-code").addEventListener("click", () => {
   updateLineCount();
   if (typeof markDebugSourceChanged === "function") markDebugSourceChanged();
   $("stdin").value = exampleInputs[currentMode];
+});
+
+// Chuyển giữa chế độ "Chạy" và "Debug": mỗi lúc chỉ hiện một chế độ.
+function setView(view) {
+  $("workspace").dataset.view = view;
+  document.querySelectorAll(".mode-btn").forEach((button) => {
+    const active = button.dataset.view === view;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  // Rời chế độ Debug thì dừng tự chạy (phiên debug vẫn giữ nguyên, quay lại là tiếp tục được).
+  if (view !== "debug" && typeof stopDebugTimer === "function") stopDebugTimer();
+}
+document.querySelectorAll(".mode-btn").forEach((button) => {
+  button.addEventListener("click", () => setView(button.dataset.view));
 });
 
 function formatMs(ms) {
@@ -329,7 +346,7 @@ async function checkHealth() {
         ? '<span style="color:var(--red)">●</span> Docker chưa bật — hãy mở Docker Desktop'
         : '<span style="color:var(--red)">●</span> Máy chủ chưa chạy được C++';
     } else {
-      badge.innerHTML = `<span class="status-dot"></span> Backend đang hoạt động · ${modeLabel}`;
+      badge.innerHTML = `<span class="status-dot"></span> ${modeLabel}`;
     }
   } catch {
     badge.innerHTML = '<span style="color:var(--red)">●</span> Không kết nối được backend';
@@ -419,9 +436,33 @@ function setDebugButtons(active, finished = false) {
   $("debug-step").disabled = !active || finished || debugBusy;
   $("debug-into").disabled = !active || finished || debugBusy;
   $("debug-stop").disabled = !active;
-  document.querySelectorAll(".speed-option").forEach((button) => {
-    button.disabled = !active;
-  });
+  $("debug-speed").disabled = !active;
+}
+
+// Hiện khung mã nguồn đang chạy (thay cho ô soạn code) khi có phiên debug; về lại ô soạn code khi dừng.
+function setDebugLive(live) {
+  $("workspace").classList.toggle("debug-live", live);
+}
+
+// Kết thúc phiên debug hiện tại (nếu có) và trả giao diện về trạng thái chờ.
+async function endDebugSession(message = "Đã dừng phiên debug.") {
+  stopDebugTimer();
+  const oldId = debugSessionId;
+  debugSessionId = null;
+  if (oldId) {
+    try { await debugApi(`/api/debug/${oldId}/stop`); } catch {}
+  }
+  debugBusy = false;
+  debugFinished = true;
+  setDebugLive(false);
+  setDebugStatus(message, "Đã dừng", "neutral");
+  $("debug-line-label").textContent = "Dòng: —";
+  $("debug-start").disabled = false;
+  $("debug-pause").disabled = true;
+  $("debug-step").disabled = true;
+  $("debug-into").disabled = true;
+  $("debug-stop").disabled = true;
+  $("debug-speed").disabled = true;
 }
 
 function renderDebugSource(currentLine) {
@@ -521,6 +562,10 @@ function renderDebugArrays(rows) {
       || type.includes("std::array<");
   });
 
+  // Khung "Mảng & vector" chỉ hiện khi code thật sự có mảng hoặc vector.
+  $("debug-arrays-panel").hidden = arrays.length === 0;
+  $("debug-arrays-hint").hidden = arrays.length > 0;
+
   if (arrays.length === 0) {
     container.className = "debug-table-empty";
     container.textContent = "Chưa tìm thấy mảng hoặc vector tại trạng thái hiện tại.";
@@ -599,6 +644,7 @@ function renderDebugState(data) {
     return;
   }
   debugFinished = Boolean(data.finished);
+  setDebugLive(true);
   renderDebugSource(data.line);
   $("debug-line-label").textContent = data.line ? `Dòng: ${data.line}` : "Dòng: —";
   renderDebugVariables(data.variables);
@@ -652,9 +698,9 @@ async function debugApi(path, body = {}) {
 }
 
 function markDebugSourceChanged() {
+  // Khi đang debug, ô soạn code bị ẩn; nếu code bị đổi (chọn mẫu khác / khôi phục ví dụ) thì kết thúc phiên cũ.
   if (debugSessionId) {
-    stopDebugTimer();
-    setDebugStatus("Mã nguồn đã thay đổi. Phiên debug vẫn dùng bản code lúc bắt đầu; hãy dừng và bắt đầu lại để áp dụng.", "Code đã đổi", "neutral");
+    endDebugSession("Mã nguồn đã thay đổi nên phiên debug cũ đã dừng. Bấm Bắt đầu debug để chạy lại.");
   }
 }
 
@@ -719,7 +765,6 @@ $("debug-start").addEventListener("click", async () => {
   debugSourceCode = code;
   $("debug-start").disabled = true;
   setDebugStatus("Đang tạo debugger và biên dịch bằng GDB…", "Đang chuẩn bị", "neutral");
-  $("debug-source").textContent = "Đang biên dịch…";
   $("debug-variables").textContent = "Đang chờ dữ liệu biến…";
   $("debug-stack").textContent = "Đang chờ call stack…";
   $("debug-output").textContent = "(chưa có output)";
@@ -728,8 +773,9 @@ $("debug-start").addEventListener("click", async () => {
     debugSessionId = data.sessionId;
     renderDebugState(data);
   } catch (error) {
+    // Lỗi biên dịch / không bắt đầu được: về lại ô soạn code để người dùng sửa, lý do hiện ở thanh trạng thái.
+    setDebugLive(false);
     setDebugStatus(error.message, "Lỗi debug", "error");
-    $("debug-source").textContent = "Không thể bắt đầu debugger.";
     $("debug-start").disabled = false;
   }
 });
@@ -754,34 +800,12 @@ $("debug-into").addEventListener("click", async () => {
   await performDebugStep(true);
 });
 
-$("debug-stop").addEventListener("click", async () => {
-  stopDebugTimer();
-  const oldId = debugSessionId;
-  debugSessionId = null;
-  if (oldId) {
-    try { await debugApi(`/api/debug/${oldId}/stop`); } catch {}
+$("debug-stop").addEventListener("click", () => endDebugSession());
+
+$("debug-speed").addEventListener("change", () => {
+  debugSpeed = Number($("debug-speed").value);
+  if (debugSessionId && debugTimer !== null) {
+    stopDebugTimer();
+    scheduleAutoStep();
   }
-  debugBusy = false;
-  debugFinished = true;
-  setDebugStatus("Đã dừng phiên debug.", "Đã dừng", "neutral");
-  $("debug-start").disabled = false;
-  $("debug-pause").disabled = true;
-  $("debug-step").disabled = true;
-  $("debug-into").disabled = true;
-  $("debug-stop").disabled = true;
-  document.querySelectorAll(".speed-option").forEach((button) => { button.disabled = true; });
 });
-
-document.querySelectorAll(".speed-option").forEach((button) => {
-  button.addEventListener("click", () => {
-    debugSpeed = Number(button.dataset.speed);
-    document.querySelectorAll(".speed-option").forEach((b) => b.classList.toggle("active", b === button));
-    if (debugSessionId && debugTimer !== null) {
-      stopDebugTimer();
-      scheduleAutoStep();
-    }
-  });
-});
-
-// Stop auto stepping when the user edits source: the current debug session runs a snapshot.
-$("code").addEventListener("input", markDebugSourceChanged);
