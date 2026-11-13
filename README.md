@@ -146,3 +146,8 @@ cpp-flow/
 ## Chia sẻ code (v10)
 
 Nút **Chia sẻ** nén code + input rồi đặt vào phần sau dấu `#` của link. Không lưu gì trên máy chủ nên link không hết hạn; người nhận mở link là thấy đúng code và input. Giới hạn ~12.000 ký tự URL.
+
+## Tìm lỗi bằng random test (v11)
+
+Chế độ **Tìm lỗi** nhận 3 chương trình: code của bạn, code đúng (vét cạn) và generator (đọc seed từ `argv[1]`, in ra một test). Web chạy seed 1, 2, 3, … và dừng ở test đầu tiên mà code của bạn sai / lỗi / quá giờ, kèm nút "Debug với input này".
+API: `POST /api/stress` `{mine, brute, gen, tests}`. Giới hạn: tối đa 1000 test, ~20 giây tổng (`CPPFLOW_STRESS_BUDGET`), mỗi chương trình tối đa 2 giây. Ở chế độ Docker, cả đợt chạy trong một container; qua runner từ xa, web Render tự chuyển lời gọi sang máy của bạn.
