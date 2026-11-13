@@ -142,3 +142,7 @@ cpp-flow/
 - Vòng lặp viết trên một dòng (`for (...) cin >> a[i];`) giờ dừng ở mỗi vòng lặp thay vì chạy hết một lần.
 - Dòng chỉ khai báo không khởi tạo (`int n;`, `int a[N], cnt[N];`) không có mã máy nên GDB bỏ qua; web tạo "điểm dừng ảo" để vẫn hiện ra.
 - Mảng rất lớn (`int a[1000005]`) đọc nhanh (trước đây mỗi bước mất ~14 giây) và mảng toàn cục lớn không còn bị mất khỏi danh sách biến.
+
+## Chia sẻ code (v10)
+
+Nút **Chia sẻ** nén code + input rồi đặt vào phần sau dấu `#` của link. Không lưu gì trên máy chủ nên link không hết hạn; người nhận mở link là thấy đúng code và input. Giới hạn ~12.000 ký tự URL.
