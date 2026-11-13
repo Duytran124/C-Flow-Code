@@ -61,9 +61,58 @@ def cppflow_dump(path):
         out["error"] = str(exc)
     with open(path, "w") as handle:
         handle.write(json.dumps(out))
+
+
+def cppflow_line_entries(path):
+    out = []
+    try:
+        frame = gdb.selected_frame()
+        sal = frame.find_sal()
+        addrs = sorted(set(int(e.pc) for e in sal.symtab.linetable().line(sal.line) or []))
+        out = addrs
+    except Exception:
+        out = []
+    with open(path, "w") as handle:
+        handle.write(json.dumps(out))
 """
 
 _NOISE_TEMPLATE_ARGS = ("allocator", "less", "char_traits", "hash", "equal_to")
+
+
+def _is_single_line_loop(text: str) -> bool:
+    """`for (...) cin >> a[i];` hay `while (...) x++;` : vòng lặp có thân nằm cùng dòng."""
+    code = text.split("//", 1)[0].strip()
+    match = re.match(r"(for|while)\s*\(", code)
+    if not match:
+        return False
+    depth = 0
+    for pos in range(match.end() - 1, len(code)):
+        if code[pos] == "(":
+            depth += 1
+        elif code[pos] == ")":
+            depth -= 1
+            if depth == 0:
+                rest = code[pos + 1:].strip()
+                return bool(rest) and rest not in ("{", ";") and not rest.startswith("{")
+    return False
+
+
+_DECL_ONLY_RE = re.compile(
+    r"^\s*(?:const\s+|static\s+|unsigned\s+|signed\s+|long\s+|short\s+|volatile\s+)*"
+    r"[A-Za-z_][\w:]*(?:\s*<[^;=()]*>)?[\s*&]+"
+    r"[A-Za-z_]\w*(?:\s*\[[^\]]*\])*"
+    r"(?:\s*,\s*[*&]?\s*[A-Za-z_]\w*(?:\s*\[[^\]]*\])*)*\s*;\s*(?://.*)?$"
+)
+
+
+def _is_declaration_only(text: str) -> bool:
+    """Dòng khai báo biến không có giá trị khởi tạo, vd `int a[N], cnt[N];`."""
+    stripped = text.strip()
+    if not stripped or "=" in stripped or "(" in stripped:
+        return False
+    if re.match(r"(return|using|typedef|goto|break|continue|else|delete|throw)\b", stripped):
+        return False
+    return bool(_DECL_ONLY_RE.match(stripped))
 
 
 def _pretty_type(type_name: str) -> str:
@@ -222,6 +271,8 @@ class DebugSession:
         self._last_pos: tuple[str, str] | None = None
         self._last_fn_end = False
         self._last_depth = 0
+        self._snap_depth = 0
+        self._queued: list[dict[str, Any]] = []
         self._source_code = code
         self._temp_dir = tempfile.mkdtemp(prefix="cpp-flow-debug-")
         work = Path(self._temp_dir)
@@ -302,6 +353,14 @@ class DebugSession:
             if self._mode == "direct":
                 # Trong container hạn chế, GDB không được phép tắt ASLR; tránh lời cảnh báo thừa.
                 self._mi_command("-gdb-set disable-randomization off")
+            # Mảng toàn cục lớn (vd int a[1000005]) vượt giới hạn 64KB mặc định của GDB
+            # nên bị bỏ sót khỏi danh sách biến.
+            try:
+                self._mi_command("-gdb-set max-value-size unlimited")
+            except DebuggerError:
+                raise
+            except Exception:
+                pass
             # Khi "Vào hàm", không chui vào ruột thư viện chuẩn (vector, string, ...):
             # nếu không thì một dòng như `vector<int> v(3);` sẽ bị dừng nhiều lần.
             for skip_cmd in ("skip -rfu ^std::", "skip -rfu ^__gnu_cxx::", "skip -rfu ^__cxx11::"):
@@ -494,7 +553,7 @@ class DebugSession:
             return {}
         text = event[start + len("frame={"):]
         fields: dict[str, str] = {}
-        for key in ("func", "file", "fullname", "line"):
+        for key in ("func", "file", "fullname", "line", "addr"):
             value = _mi_attr(text, key)
             if value is not None:
                 fields[key] = value
@@ -542,6 +601,40 @@ class DebugSession:
             stop = new_stop
             self._stopped = True
         return stop
+
+    def _single_line_loop_active(self) -> bool:
+        if not self._last_pos or not self._last_pos[1].isdigit():
+            return False
+        lines = self._source_code.splitlines()
+        idx = int(self._last_pos[1]) - 1
+        return 0 <= idx < len(lines) and _is_single_line_loop(lines[idx])
+
+    def _step_single_line_loop(self, into: bool) -> tuple[str, str | None]:
+        """`for (...) thân;` trên một dòng: `next` của GDB chạy hết cả vòng lặp vì mọi lần
+        lặp đều cùng một dòng. Ở đây đi từng lệnh máy (bước qua các lời gọi hàm) và dừng
+        khi nhảy ngược về thân vòng lặp (mỗi vòng một lần) hoặc khi sang dòng khác."""
+        start = self._frame_fields(self._stop_event or "")
+        start_line = start.get("line") or (self._last_pos[1] if self._last_pos else "")
+        start_func = start.get("func") or (self._last_pos[0] if self._last_pos else "")
+        prev_addr = int(start["addr"], 16) if start.get("addr") else None
+        result, stop = "", None
+        for _ in range(20000):
+            command = "-exec-next-instruction"
+            if into and prev_addr is not None:
+                dis, _ = self._mi_command(f"-data-disassemble -s {hex(prev_addr)} -e {hex(prev_addr + 16)} -- 0")
+                if re.search(r'inst="call', dis):
+                    command = "-exec-step-instruction"
+            result, stop = self._mi_command(command, wait_stop=True)
+            if "^error" in result or not stop or 'reason="end-stepping-range"' not in stop:
+                return result, stop
+            fields = self._frame_fields(stop)
+            if fields.get("line") != start_line or fields.get("func") != start_func:
+                return result, stop
+            addr = int(fields["addr"], 16) if fields.get("addr") else None
+            if addr is not None and prev_addr is not None and addr < prev_addr:
+                return result, stop  # nhảy ngược: bắt đầu vòng lặp mới
+            prev_addr = addr
+        return result, stop
 
     def _stack_depth(self) -> int:
         try:
@@ -638,12 +731,31 @@ class DebugSession:
                 count: int,
                 depth: int = 0,
                 expr: str | None = None,
+                fast: bool = False,
             ) -> list[dict[str, Any]]:
                 """Đọc tối đa 100 phần tử đầu để snapshot không quá nặng."""
                 if depth >= 2 or count <= 0:
                     return []
 
                 limit = min(count, MAX_ARRAY_ITEMS if depth == 0 else 50)
+
+                if fast and expr:
+                    # Mảng rất lớn (vd int a[1000005]): -var-list-children của GDB
+                    # tạo biến con cho CẢ mảng nên mất vài giây. Đọc thẳng từng phần tử.
+                    quick: list[dict[str, Any]] = []
+                    for index in range(limit):
+                        element = evaluate(f"{expr}[{index}]")
+                        if element is None:
+                            break
+                        quick.append({
+                            "name": f"[{index}]",
+                            "value": element,
+                            "type": "",
+                            "children": [],
+                            "expandable": False,
+                            "numChildren": 0,
+                        })
+                    return quick
 
                 # Khoảng [from, to) của GDB/MI không gồm chỉ số `to`,
                 # nên phải truyền `limit` (không phải `limit - 1`).
@@ -776,6 +888,7 @@ class DebugSession:
                     stack_depth = int(_mi_attr(depth_result, "depth") or 0)
                 except (ValueError, TypeError):
                     stack_depth = 0
+                self._snap_depth = stack_depth
                 func_name = frame.get("func", "")
                 # Frame đã thoát (độ sâu lớn hơn hiện tại) thì quên đi.
                 self._confirmed = {k for k in self._confirmed if k[0] <= stack_depth}
@@ -1056,6 +1169,12 @@ class DebugSession:
                         count if count > 0 else MAX_ARRAY_ITEMS,
                         0,
                         expression,
+                        fast=(
+                            "[" in var_type
+                            and "vector<" not in var_type
+                            and "array<" not in var_type
+                            and count > 1000
+                        ),
                     )
                     variable["children"] = children
 
@@ -1204,11 +1323,16 @@ class DebugSession:
             self.last_activity = time.time()
             if self._finished:
                 return self._snapshot()
+            if self._queued:
+                return self._queued.pop(0)
             if not self._stopped:
                 raise DebuggerError("Chương trình chưa ở trạng thái dừng an toàn.")
             command = "-exec-step" if into else "-exec-next"
             self._stop_event = None
-            result, stop = self._mi_command(command, wait_stop=True)
+            if self._single_line_loop_active():
+                result, stop = self._step_single_line_loop(into)
+            else:
+                result, stop = self._mi_command(command, wait_stop=True)
             if "^error" in result:
                 # GDB can return this when a source-level step is requested at
                 # the end of main (there is no further source range to step to).
@@ -1255,12 +1379,41 @@ class DebugSession:
                     break
                 stop = self._leave_non_user_code(stop2)
             fields = self._frame_fields(stop or "")
+            previous_pos = self._last_pos
+            previous_depth = self._snap_depth
             self._last_pos = (fields.get("func", ""), fields.get("line", ""))
             self._last_fn_end = self._is_function_end(stop)
             self._last_depth = self._stack_depth() if self._last_fn_end else 0
             self._stop_event = stop
+
+            # Dòng chỉ khai báo biến không khởi tạo (`int n;`, `int a[N], b[N];`) không có
+            # mã máy nên GDB không bao giờ dừng ở đó. Tạo "điểm dừng ảo" cho các dòng này.
+            skipped: list[int] = []
+            if (stop and not self._is_exit_event(stop) and previous_pos
+                    and previous_pos[0] == self._last_pos[0]
+                    and previous_pos[1].isdigit() and self._last_pos[1].isdigit()):
+                first, last = int(previous_pos[1]), int(self._last_pos[1])
+                for number in range(first + 1, last):
+                    if 0 < number <= len(src_lines) and _is_declaration_only(src_lines[number - 1]):
+                        skipped.append(number)
+                if skipped and self._stack_depth() != previous_depth:
+                    skipped = []
+            snapshots = []
+            for number in skipped:
+                fake = stop.replace(f'line="{self._last_pos[1]}"', f'line="{number}"', 1)
+                fake_snapshot = self._snapshot(fake)
+                if fake_snapshot.get("stack"):
+                    top = fake_snapshot["stack"][0]
+                    if isinstance(top, dict) and "line" in top:
+                        top["line"] = type(top["line"])(number)
+                snapshots.append(fake_snapshot)
+            real = self._snapshot(stop)
             self._stopped = True
-            return self._snapshot(stop)
+            if real.get("finished") or real.get("error"):
+                return real
+            snapshots.append(real)
+            self._queued = snapshots[1:]
+            return snapshots[0]
 
     def close(self) -> None:
         proc = getattr(self, "_proc", None)
