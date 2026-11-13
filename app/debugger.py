@@ -40,6 +40,64 @@ UNBUFFER_SOURCE = (
     "}\n"
 )
 
+# Script Python chạy bên trong GDB: cho biết mỗi biến cục bộ được khai báo ở dòng nào,
+# để web biết biến nào "chưa được khai báo" tại dòng hiện tại (GDB vẫn liệt kê chúng
+# kèm giá trị rác).
+GDB_HELPER_SOURCE = """\
+import gdb, json
+
+def cppflow_dump(path):
+    out = {"vars": []}
+    try:
+        block = gdb.selected_frame().block()
+        while block is not None and not block.is_global and not block.is_static:
+            for sym in block:
+                if sym.is_variable or sym.is_argument:
+                    out["vars"].append([sym.name, sym.line, bool(sym.is_argument)])
+            if block.function is not None:
+                break
+            block = block.superblock
+    except Exception as exc:
+        out["error"] = str(exc)
+    with open(path, "w") as handle:
+        handle.write(json.dumps(out))
+"""
+
+_NOISE_TEMPLATE_ARGS = ("allocator", "less", "char_traits", "hash", "equal_to")
+
+
+def _pretty_type(type_name: str) -> str:
+    """Rút gọn tên kiểu dài dòng của GDB (std::vector<int, std::allocator<int> > -> vector<int>)."""
+    if not type_name:
+        return type_name
+    text = type_name
+    for noise in _NOISE_TEMPLATE_ARGS:
+        marker = f", std::{noise}<"
+        while True:
+            start = text.find(marker)
+            if start == -1:
+                break
+            depth = 0
+            end = None
+            for pos in range(start + len(marker) - 1, len(text)):
+                if text[pos] == "<":
+                    depth += 1
+                elif text[pos] == ">":
+                    depth -= 1
+                    if depth == 0:
+                        end = pos + 1
+                        break
+            if end is None:
+                break
+            text = text[:start] + text[end:]
+    text = re.sub(r"\s+>", ">", text)
+    text = text.replace("std::__cxx11::basic_string<char>", "string")
+    text = text.replace("std::__cxx11::", "").replace("std::", "")
+    text = re.sub(r"\bbasic_string<char>", "string", text)
+    text = re.sub(r"\s+>", ">", text)
+    return text
+
+
 class DebuggerError(RuntimeError):
     pass
 
@@ -158,6 +216,12 @@ class DebugSession:
         # Danh sách biến toàn cục không đổi giữa các bước; truy vấn GDB tốn ~0,8 giây
         # nên chỉ làm một lần cho mỗi phiên.
         self._global_symbol_cache: set[str] | None = None
+        # Biến (độ sâu stack, hàm, tên) đã đi qua dòng khai báo -> đã có giá trị thật.
+        self._confirmed: set[tuple[int, str, str]] = set()
+        self._pending_uninit: set[tuple[int, str, str]] = set()
+        self._last_pos: tuple[str, str] | None = None
+        self._last_fn_end = False
+        self._last_depth = 0
         self._source_code = code
         self._temp_dir = tempfile.mkdtemp(prefix="cpp-flow-debug-")
         work = Path(self._temp_dir)
@@ -167,6 +231,7 @@ class DebugSession:
         (work / "main.cpp").write_text(code, encoding="utf-8")
         (work / "input.txt").write_text(stdin, encoding="utf-8")
         (work / "unbuf.c").write_text(UNBUFFER_SOURCE, encoding="utf-8")
+        (work / "cppflow_helper.py").write_text(GDB_HELPER_SOURCE, encoding="utf-8")
 
         try:
             if self._mode == "direct":
@@ -237,6 +302,21 @@ class DebugSession:
             if self._mode == "direct":
                 # Trong container hạn chế, GDB không được phép tắt ASLR; tránh lời cảnh báo thừa.
                 self._mi_command("-gdb-set disable-randomization off")
+            # Khi "Vào hàm", không chui vào ruột thư viện chuẩn (vector, string, ...):
+            # nếu không thì một dòng như `vector<int> v(3);` sẽ bị dừng nhiều lần.
+            for skip_cmd in ("skip -rfu ^std::", "skip -rfu ^__gnu_cxx::", "skip -rfu ^__cxx11::"):
+                try:
+                    self._mi_command(f'-interpreter-exec console "{skip_cmd}"')
+                except DebuggerError:
+                    raise
+                except Exception:
+                    pass
+            try:
+                self._mi_command(f'-interpreter-exec console "source {wd}/cppflow_helper.py"')
+            except DebuggerError:
+                raise
+            except Exception:
+                pass
             if (work / "unbuf.so").exists():
                 self._mi_command(f"-gdb-set environment LD_PRELOAD {wd}/unbuf.so")
             breakpoint_result, _ = self._mi_command("-break-insert main")
@@ -427,7 +507,17 @@ class DebugSession:
     def _is_user_frame(self, event: str) -> bool:
         fields = self._frame_fields(event)
         name = (fields.get("fullname") or fields.get("file") or "").replace("\\", "/")
-        return name.rsplit("/", 1)[-1] == USER_SOURCE_NAME
+        if name.rsplit("/", 1)[-1] != USER_SOURCE_NAME:
+            return False
+        # Hàm khởi tạo/hủy do trình biên dịch tự sinh nằm ở dòng `struct X {...};`:
+        # không phải code người dùng viết nên bỏ qua.
+        line = fields.get("line", "")
+        if line.isdigit():
+            lines = self._source_code.splitlines()
+            idx = int(line) - 1
+            if 0 <= idx < len(lines) and re.match(r"\s*(struct|class)\b", lines[idx]):
+                return False
+        return True
 
     def _stack_has_user_frame(self) -> bool:
         result, _ = self._mi_command("-stack-list-frames")
@@ -452,6 +542,22 @@ class DebugSession:
             stop = new_stop
             self._stopped = True
         return stop
+
+    def _stack_depth(self) -> int:
+        try:
+            result, _ = self._mi_command("-stack-info-depth")
+            return int(_mi_attr(result, "depth") or 0)
+        except Exception:
+            return 0
+
+    def _is_function_end(self, stop: str | None) -> bool:
+        """Dòng `}` đóng một hàm (nằm sát lề trái)."""
+        fields = self._frame_fields(stop or "")
+        if not fields.get("line", "").isdigit():
+            return False
+        lines = self._source_code.splitlines()
+        idx = int(fields["line"]) - 1
+        return 0 <= idx < len(lines) and lines[idx].startswith("}")
 
     def _snapshot(self, stop_line: str | None = None) -> dict[str, Any]:
         event = stop_line or self._stop_event or ""
@@ -531,12 +637,13 @@ class DebugSession:
                 var_name: str,
                 count: int,
                 depth: int = 0,
+                expr: str | None = None,
             ) -> list[dict[str, Any]]:
                 """Đọc tối đa 100 phần tử đầu để snapshot không quá nặng."""
                 if depth >= 2 or count <= 0:
                     return []
 
-                limit = min(count, MAX_ARRAY_ITEMS)
+                limit = min(count, MAX_ARRAY_ITEMS if depth == 0 else 50)
 
                 # Khoảng [from, to) của GDB/MI không gồm chỉ số `to`,
                 # nên phải truyền `limit` (không phải `limit - 1`).
@@ -546,7 +653,7 @@ class DebugSession:
                 )
 
                 if "^error" in result or "^done" not in result:
-                    print(f"[DEBUG ARRAY READ] {result[-1000:]}", flush=True)
+                    print(f"[DEBUG ARRAY READ] {var_name!r} {result[-300:]}", flush=True)
                     return []
 
                 content = _mi_bracket_content(result, "children")
@@ -567,16 +674,46 @@ class DebugSession:
                     except (ValueError, TypeError):
                         child_count = 0
 
-                    if not child_name:
+                    if not child_name or "<error" in child_name:
                         continue
+
+                    child_expr: str | None = None
+                    index_match = re.fullmatch(r"\[(\d+)\]", child_exp or "")
+                    if expr and index_match:
+                        child_expr = f"{expr}[{index_match.group(1)}]"
+                    if not child_value and child_expr:
+                        # Phần tử là struct/pair...: GDB để trống giá trị khi liệt kê con.
+                        child_value = evaluate(child_expr) or ""
+
+                    sub_children: list[dict[str, Any]] = []
+                    sub_total = child_count
+                    is_nested_array = (
+                        "vector<" in child_type
+                        or "std::array<" in child_type
+                        or (child_type.endswith("]") and "[" in child_type)
+                    )
+                    if depth == 0 and is_nested_array and not child_type.startswith("std::vector<bool"):
+                        sub_children = read_children(
+                            child_name,
+                            child_count if child_count > 0 else 50,
+                            depth + 1,
+                            child_expr,
+                        )
+                        if child_count <= 0:
+                            sub_total = len(sub_children)
+                        if sub_children:
+                            shown = ", ".join(c["value"] for c in sub_children)
+                            child_value = "[" + shown + (", …" if sub_total > len(sub_children) else "") + "]"
+                        elif "vector<" in child_type and child_count <= 0:
+                            child_value = "[]"
 
                     children.append({
                         "name": child_exp or child_name,
                         "value": child_value,
-                        "type": child_type,
-                        "children": [],
-                        "expandable": child_count > 0,
-                        "numChildren": child_count,
+                        "type": _pretty_type(child_type),
+                        "children": sub_children,
+                        "expandable": sub_total > 0,
+                        "numChildren": sub_total,
                         "varObject": child_name,
                     })
 
@@ -618,7 +755,64 @@ class DebugSession:
                             if name:
                                 parsed_locals.append((name, ""))
 
+                # Hỏi GDB (Python) xem mỗi biến khai báo ở dòng nào.
+                decl: dict[str, tuple[int, bool]] = {}
+                try:
+                    decl_path = Path(self._temp_dir) / "decl.json"
+                    decl_path.unlink(missing_ok=True)
+                    self._mi_command(
+                        f'-interpreter-exec console "python cppflow_dump(\'{self._wd}/decl.json\')"'
+                    )
+                    if decl_path.exists():
+                        info = json.loads(decl_path.read_text(encoding="utf-8"))
+                        for dname, dline, is_arg in info.get("vars", []):
+                            decl.setdefault(dname, (int(dline), bool(is_arg)))
+                except Exception as exc:
+                    print(f"[DEBUG DECL] {exc}", flush=True)
+                    decl = {}
+
+                depth_result, _ = self._mi_command("-stack-info-depth")
+                try:
+                    stack_depth = int(_mi_attr(depth_result, "depth") or 0)
+                except (ValueError, TypeError):
+                    stack_depth = 0
+                func_name = frame.get("func", "")
+                # Frame đã thoát (độ sâu lớn hơn hiện tại) thì quên đi.
+                self._confirmed = {k for k in self._confirmed if k[0] <= stack_depth}
+                self._pending_uninit = {k for k in self._pending_uninit if k[0] <= stack_depth}
+                # Biến đã ra khỏi scope (không còn trong danh sách) cũng quên đi.
+                if decl:
+                    self._pending_uninit = {
+                        k for k in self._pending_uninit
+                        if not (k[0] == stack_depth and k[1] == func_name and k[2] not in decl)
+                    }
+                    self._confirmed = {
+                        k for k in self._confirmed
+                        if not (k[0] == stack_depth and k[1] == func_name and k[2] not in decl)
+                    }
+
                 for name, value in parsed_locals:
+                    # Biến do trình biên dịch tự tạo (__for_range, __for_begin, ...).
+                    if name.startswith("__"):
+                        continue
+                    info_line = decl.get(name)
+                    if info_line is not None and line_number is not None:
+                        decl_line, is_arg = info_line
+                        key = (stack_depth, func_name, name)
+                        if not is_arg:
+                            if decl_line > line_number:
+                                continue  # chưa tới dòng khai báo
+                            if decl_line < line_number:
+                                self._confirmed.add(key)
+                            elif key not in self._confirmed and key not in self._pending_uninit:
+                                # Lần đầu dừng ở dòng khai báo: biến chưa có giá trị.
+                                # (Từ lần dừng thứ hai trên cùng dòng, ví dụ vòng for, là đã có.)
+                                self._pending_uninit.add(key)
+                                add_variable(name, "")
+                                variables[-1]["uninitialized"] = True
+                                continue
+                            else:
+                                self._confirmed.add(key)
                     add_variable(name, value)
 
             except Exception as exc:
@@ -830,7 +1024,7 @@ class DebugSession:
                     except (ValueError, TypeError):
                         count = 0
 
-                    variable["type"] = var_type
+                    variable["type"] = _pretty_type(var_type)
                     variable["numChildren"] = count
                     variable["expandable"] = count > 0
                     variable["arrayLike"] = (
@@ -839,6 +1033,13 @@ class DebugSession:
                         or var_type.startswith("vector<")
                         or "std::array<" in var_type
                     )
+
+                    if variable.get("uninitialized"):
+                        variable["value"] = ""
+                        variable["children"] = []
+                        variable["expandable"] = False
+                        variable["numChildren"] = 0
+                        continue
 
                     is_vector = (
                         "vector<" in var_type
@@ -853,6 +1054,8 @@ class DebugSession:
                     children = read_children(
                         var_name,
                         count if count > 0 else MAX_ARRAY_ITEMS,
+                        0,
+                        expression,
                     )
                     variable["children"] = children
 
@@ -897,7 +1100,17 @@ class DebugSession:
                         variable["expandable"] = vector_size > 0
                         variable["arrayLike"] = True
 
-                    if children:
+                    if is_vector and count == 0:
+                        variable["value"] = "[]"
+                    else:
+                        container_match = re.match(
+                            r"^std::\w+ with (\d+) elements?(?: = )?(.*)$",
+                            str(variable.get("value", "")),
+                        )
+                        if container_match:
+                            variable["value"] = container_match.group(2) or "{}"
+
+                    if children and variable.get("arrayLike"):
                         values = [child["value"] for child in children]
                         variable["value"] = (
                             "[" + ", ".join(values)
@@ -959,6 +1172,15 @@ class DebugSession:
             else ("đang dừng" if self._stopped else "sẵn sàng")
         )
 
+        error_text = self._last_error
+        if not self._finished and 'reason="signal-received"' in event:
+            signal_name = _mi_attr(event, "signal-name") or ""
+            meaning = _mi_attr(event, "signal-meaning") or "lỗi runtime"
+            error_text = (
+                f"Chương trình bị lỗi: {meaning} ({signal_name}) tại dòng {line_number}. "
+                "Bấm Tiến bước để kết thúc chương trình."
+            )
+
         snapshot = {
             "sessionId": self.id,
             "line": line_number,
@@ -969,7 +1191,7 @@ class DebugSession:
             "stdout": self._read_program_output(),
             "finished": self._finished,
             "reason": reason,
-            "error": self._last_error,
+            "error": error_text,
         }
 
         if not self._finished and line_number is not None:
@@ -1005,6 +1227,37 @@ class DebugSession:
                 raise DebuggerError(result[-1000:])
             # Tránh dừng lại trong ruột STL/libc: thoát ra tới dòng kế tiếp của main.cpp.
             stop = self._leave_non_user_code(stop)
+            # Dòng "}" của hàm có thể bị dừng 2 lần (lần 2 là lúc hủy biến cục bộ,
+            # lúc đó vector/string đã bị giải phóng nên giá trị là rác). Bỏ qua lần lặp lại.
+            src_lines = self._source_code.splitlines()
+            for _ in range(3):
+                fields = self._frame_fields(stop or "")
+                line_text = ""
+                if fields.get("line", "").isdigit():
+                    idx = int(fields["line"]) - 1
+                    if 0 <= idx < len(src_lines):
+                        line_text = src_lines[idx].strip()
+                pos = (fields.get("func", ""), fields.get("line", ""))
+                if not stop or self._is_exit_event(stop) or 'reason="signal-received"' in stop:
+                    break
+                repeated_brace = line_text == "}" and pos == self._last_pos
+                # Vừa ở dấu } kết thúc hàm mà vẫn còn trong hàm đó (đang hủy biến cục bộ).
+                lingering = (
+                    self._last_fn_end
+                    and pos[0] == self._last_pos[0]
+                    and self._stack_depth() == self._last_depth
+                ) if self._last_pos else False
+                if not (repeated_brace or lingering):
+                    break
+                self._stop_event = None
+                result2, stop2 = self._mi_command("-exec-next", wait_stop=True)
+                if "^error" in result2 or stop2 is None:
+                    break
+                stop = self._leave_non_user_code(stop2)
+            fields = self._frame_fields(stop or "")
+            self._last_pos = (fields.get("func", ""), fields.get("line", ""))
+            self._last_fn_end = self._is_function_end(stop)
+            self._last_depth = self._stack_depth() if self._last_fn_end else 0
             self._stop_event = stop
             self._stopped = True
             return self._snapshot(stop)
@@ -1038,6 +1291,10 @@ class DebugSession:
             self.last_activity = time.time()
             event, self._stop_event = self._stop_event, None
             result = self._snapshot(event)
+            fields = self._frame_fields(event or "")
+            self._last_pos = (fields.get("func", ""), fields.get("line", ""))
+            self._last_fn_end = self._is_function_end(event)
+            self._last_depth = self._stack_depth() if self._last_fn_end else 0
             self._stop_event = event
             return result
 
