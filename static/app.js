@@ -508,16 +508,18 @@ function renderDebugTable(containerId, rows, emptyText, columns) {
   container.replaceChildren(table);
 }
 
+function isArrayVariable(variable) {
+  if (variable.uninitialized) return false;
+  const type = String(variable.type || "");
+  return Boolean(variable.arrayLike)
+    || type.includes("[")
+    || type.includes("vector<")
+    || type.includes("array<");
+}
+
 function renderDebugVariables(rows) {
   const container = $("debug-variables");
-  const scalarRows = (rows || []).filter((variable) => {
-    const type = String(variable.type || "");
-    const isArray = Boolean(variable.arrayLike)
-      || type.includes("[")
-      || type.includes("vector<")
-      || type.includes("std::array<");
-    return !isArray;
-  });
+  const scalarRows = (rows || []).filter((variable) => !isArrayVariable(variable));
 
   if (scalarRows.length === 0) {
     container.className = "debug-table-empty";
@@ -540,9 +542,11 @@ function renderDebugVariables(rows) {
   const tbody = document.createElement("tbody");
   scalarRows.forEach((variable) => {
     const tr = document.createElement("tr");
-    [variable.name ?? "—", variable.type || "—", variable.value ?? "—"].forEach((value) => {
+    const shown = variable.uninitialized ? "(chưa khởi tạo)" : (variable.value ?? "—");
+    [variable.name ?? "—", variable.type || "—", shown].forEach((value, col) => {
       const td = document.createElement("td");
       td.textContent = String(value);
+      if (variable.uninitialized && col === 2) { td.style.opacity = ".5"; td.style.fontStyle = "italic"; }
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
@@ -554,13 +558,7 @@ function renderDebugVariables(rows) {
 
 function renderDebugArrays(rows) {
   const container = $("debug-arrays");
-  const arrays = (rows || []).filter((variable) => {
-    const type = String(variable.type || "");
-    return Boolean(variable.arrayLike)
-      || type.includes("[")
-      || type.includes("vector<")
-      || type.includes("std::array<");
-  });
+  const arrays = (rows || []).filter(isArrayVariable);
 
   // Khung "Mảng & vector" chỉ hiện khi code thật sự có mảng hoặc vector.
   $("debug-arrays-panel").hidden = arrays.length === 0;
@@ -597,13 +595,18 @@ function renderDebugArrays(rows) {
     table.className = "debug-table";
     table.style.cssText = "width:max-content;min-width:100%;border-collapse:collapse;";
 
+    const isMatrix = (array.children || []).length > 0
+      && array.children.every((c) => Array.isArray(c.children) && c.children.length > 0);
     const headRow = document.createElement("tr");
-    const indexHead = document.createElement("th");
-    indexHead.textContent = "Chỉ số";
-    headRow.appendChild(indexHead);
-    const valueHead = document.createElement("th");
-    valueHead.textContent = "Giá trị";
-    headRow.appendChild(valueHead);
+    const cols = isMatrix ? Math.max(...array.children.map((c) => c.children.length)) : 0;
+    const heads = isMatrix
+      ? ["", ...Array.from({length: cols}, (_, i) => `[${i}]`)]
+      : ["Chỉ số", "Giá trị"];
+    heads.forEach((label) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      headRow.appendChild(th);
+    });
     const thead = document.createElement("thead");
     thead.appendChild(headRow);
     table.appendChild(thead);
@@ -613,16 +616,35 @@ function renderDebugArrays(rows) {
       const row = document.createElement("tr");
       const indexCell = document.createElement("td");
       indexCell.textContent = child.name || `[${index}]`;
-      const valueCell = document.createElement("td");
-      valueCell.textContent = child.value ?? "—";
-      valueCell.style.whiteSpace = "nowrap";
-      row.append(indexCell, valueCell);
+      row.appendChild(indexCell);
+      if (isMatrix) {
+        child.children.forEach((cell) => {
+          const td = document.createElement("td");
+          td.textContent = cell.value ?? "—";
+          td.style.whiteSpace = "nowrap";
+          row.appendChild(td);
+        });
+      } else {
+        const valueCell = document.createElement("td");
+        valueCell.textContent = child.value || (child.type === "" ? "—" : "[]");
+        valueCell.style.whiteSpace = "nowrap";
+        row.appendChild(valueCell);
+      }
       tbody.appendChild(row);
     });
-    if (total > loaded) {
+    if (!(array.children || []).length) {
       const row = document.createElement("tr");
       const cell = document.createElement("td");
       cell.colSpan = 2;
+      cell.textContent = "(rỗng)";
+      cell.style.opacity = ".6";
+      row.appendChild(cell);
+      tbody.appendChild(row);
+    }
+    if (total > loaded) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = isMatrix ? cols + 1 : 2;
       cell.textContent = `… còn ${total - loaded} phần tử chưa tải`;
       cell.style.opacity = ".7";
       row.appendChild(cell);
@@ -663,7 +685,11 @@ function renderDebugState(data) {
     $("debug-pause").disabled = true;
   } else {
     const fn = data.function ? ` trong ${data.function}()` : "";
-    setDebugStatus(`Đang dừng${fn}${data.line ? ` tại dòng ${data.line}` : ""}.`, "Đang debug", "success");
+    if (data.error) {
+      setDebugStatus(data.error, "Lỗi chạy", "error");
+    } else {
+      setDebugStatus(`Đang dừng${fn}${data.line ? ` tại dòng ${data.line}` : ""}.`, "Đang debug", "success");
+    }
     setDebugButtons(true, false);
   }
 }
