@@ -114,7 +114,7 @@ def _run_one(work: Path, binary: str, args: list[str], stdin_file: Path, tag: st
         fsize_mb=GEN_MAX_OUTPUT_MB, nproc=64,
     )
     return (status, timed_out,
-            sandbox.read_text(out, SHOW_LIMIT * 20), sandbox.read_text(err, 4000))
+            sandbox.read_text(out, 1_100_000), sandbox.read_text(err, 4000))
 
 
 def _describe_exit(status: int) -> str:
@@ -190,7 +190,8 @@ def _stress_direct(sources: dict[str, str], tests: int, start: int = 1) -> dict:
                 if kind:
                     return {
                         "status": "found", "kind": kind, "seed": seed, "tests": seed - start + 1,
-                        "input": _clip(test_input), "mine": _clip(a_out), "brute": _clip(b_out),
+                        "input": _clip(test_input), "inputSize": len(test_input.encode("utf-8")),
+                        "mine": _clip(a_out), "brute": _clip(b_out),
                         "stderr": _clip(a_err, 2000),
                         "message": ("Code của bạn chạy quá " + f"{PER_RUN_SECONDS} giây" if a_timeout
                                     else _describe_exit(a_status) if a_status != 0 else ""),
@@ -241,7 +242,7 @@ while [ $i -lt {start + tests} ]; do
     cmp -s /tmp/a.n /tmp/b.n || kind=wrong_answer
   fi
   if [ -n "$kind" ]; then
-    echo "{m} FOUND $kind $i $s"
+    echo "{m} FOUND $kind $i $s $(wc -c < /tmp/in.txt)"
     echo "{m} IN"; head -c {SHOW_LIMIT} /tmp/in.txt
     echo; echo "{m} MINE"; head -c {SHOW_LIMIT} /tmp/a.out
     echo; echo "{m} BRUTE"; head -c {SHOW_LIMIT} /tmp/b.out
@@ -310,6 +311,7 @@ def _parse_docker_output(stdout: str, start: int = 1) -> dict:
                 "input": _clip(body(sections[0])), "stderr": named.get("ERR", "")}
     if tag == "FOUND":
         kind, seed, code = first[1], int(first[2]), int(first[3])
+        input_size = int(first[4]) if len(first) > 4 and first[4].isdigit() else None
         message = ""
         if kind == "timeout":
             message = f"Code của bạn chạy quá {PER_RUN_SECONDS} giây"
@@ -318,6 +320,6 @@ def _parse_docker_output(stdout: str, start: int = 1) -> dict:
                        136: "Lỗi số học (chia cho 0)", 134: "Chương trình bị hủy (abort)"
                        }.get(code, f"Kết thúc với exit code {code}")
         return {"status": "found", "kind": kind, "seed": seed, "tests": seed - start + 1,
-                "input": named.get("IN", ""), "mine": named.get("MINE", ""),
+                "input": named.get("IN", ""), "inputSize": input_size, "mine": named.get("MINE", ""),
                 "brute": named.get("BRUTE", ""), "stderr": named.get("ERR", ""), "message": message}
     return {"status": "error", "kind": "internal", "message": "Kết quả từ Docker không hợp lệ."}
