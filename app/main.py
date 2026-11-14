@@ -103,6 +103,7 @@ class StressRequest(BaseModel):
     brute: str = Field(max_length=100_000)
     gen: str = Field(max_length=100_000)
     tests: int = Field(default=200, ge=1, le=1000)
+    start: int = Field(default=1, ge=1, le=1_000_000)
 
 
 class StepRequest(BaseModel):
@@ -196,7 +197,7 @@ def stress(request: StressRequest, http_request: Request):
         except remote.RemoteUnavailable:
             pass  # runner tắt: dự phòng chạy trực tiếp trên máy chủ này
     try:
-        return run_stress(request.mine, request.brute, request.gen, request.tests)
+        return run_stress(request.mine, request.brute, request.gen, request.tests, request.start)
     except DockerUnavailable as exc:
         return {"status": "error", "kind": "environment", "message": str(exc)}
     except RunnerError as exc:

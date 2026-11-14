@@ -32,7 +32,7 @@ MAX_TESTS = 1000
 DEFAULT_TESTS = 200
 PER_RUN_SECONDS = 2
 # Tổng thời gian tối đa cho cả đợt (không tính biên dịch).
-BUDGET_SECONDS = float(os.environ.get("CPPFLOW_STRESS_BUDGET", "20"))
+BUDGET_SECONDS = float(os.environ.get("CPPFLOW_STRESS_BUDGET", "15"))
 SHOW_LIMIT = 6000  # số ký tự tối đa hiển thị cho input / output của test lỗi
 GEN_MAX_OUTPUT_MB = 1
 
@@ -51,7 +51,7 @@ def _same(a: str, b: str) -> bool:
     return a.split() == b.split()
 
 
-def run_stress(mine: str, brute: str, gen: str, tests: int = DEFAULT_TESTS) -> dict:
+def run_stress(mine: str, brute: str, gen: str, tests: int = DEFAULT_TESTS, start: int = 1) -> dict:
     sources = {"mine": mine, "brute": brute, "gen": gen}
     for name, text in sources.items():
         if len(text.encode("utf-8")) > MAX_SOURCE_BYTES:
@@ -60,12 +60,13 @@ def run_stress(mine: str, brute: str, gen: str, tests: int = DEFAULT_TESTS) -> d
             return {"status": "error", "kind": "missing", "which": name,
                     "message": f"Chưa có {LABELS[name].lower()}."}
     tests = max(1, min(int(tests), MAX_TESTS))
+    start = max(1, int(start))
 
     mode = sandbox.resolve_mode()
     if mode is None:
         raise DockerUnavailable("Chế độ chạy trực tiếp cần Linux có g++ và prlimit.")
     started = time.perf_counter()
-    result = _stress_direct(sources, tests) if mode == "direct" else _stress_docker(sources, tests)
+    result = _stress_direct(sources, tests, start) if mode == "direct" else _stress_docker(sources, tests, start)
     result["durationMs"] = round((time.perf_counter() - started) * 1000)
     result["requested"] = tests
     return result
@@ -133,7 +134,7 @@ def _describe_exit(status: int) -> str:
     return f"Kết thúc với exit code {status}"
 
 
-def _stress_direct(sources: dict[str, str], tests: int) -> dict:
+def _stress_direct(sources: dict[str, str], tests: int, start: int = 1) -> dict:
     try:
         with sandbox.run_slot(), tempfile.TemporaryDirectory(prefix="cpp-flow-stress-") as temp:
             work = Path(temp)
@@ -143,9 +144,9 @@ def _stress_direct(sources: dict[str, str], tests: int) -> dict:
                     return failure
 
             deadline = time.monotonic() + BUDGET_SECONDS
-            for seed in range(1, tests + 1):
+            for seed in range(start, start + tests):
                 if time.monotonic() > deadline:
-                    return {"status": "ok", "kind": "no_diff", "tests": seed - 1, "timeLimited": True}
+                    return {"status": "ok", "kind": "no_diff", "tests": seed - start, "timeLimited": True}
 
                 (work / "seed.txt").write_text(f"{seed}\n")
                 g_status, g_timeout, test_input, g_err = _run_one(work, "gen", [str(seed)], work / "seed.txt", "gen")
@@ -172,7 +173,7 @@ def _stress_direct(sources: dict[str, str], tests: int) -> dict:
                     kind = "wrong_answer"
                 if kind:
                     return {
-                        "status": "found", "kind": kind, "seed": seed, "tests": seed,
+                        "status": "found", "kind": kind, "seed": seed, "tests": seed - start + 1,
                         "input": _clip(test_input), "mine": _clip(a_out), "brute": _clip(b_out),
                         "stderr": _clip(a_err, 2000),
                         "message": ("Code của bạn chạy quá " + f"{PER_RUN_SECONDS} giây" if a_timeout
@@ -188,7 +189,7 @@ def _stress_direct(sources: dict[str, str], tests: int) -> dict:
 # --------------------------------------------------------------------------------------
 # Chạy trong Docker: cả đợt trong MỘT container để khỏi tốn thời gian khởi động mỗi lượt.
 # --------------------------------------------------------------------------------------
-def _docker_script(tests: int) -> str:
+def _docker_script(tests: int, start: int = 1) -> str:
     m = MARK
     return f"""
 set +e
@@ -200,10 +201,10 @@ for n in mine brute gen; do
   fi
 done
 start=$(date +%s)
-i=1
-while [ $i -le {tests} ]; do
+i={start}
+while [ $i -lt {start + tests} ]; do
   now=$(date +%s)
-  if [ $((now-start)) -ge {int(BUDGET_SECONDS)} ]; then echo "{m} DONE $((i-1)) limited"; exit 0; fi
+  if [ $((now-start)) -ge {int(BUDGET_SECONDS)} ]; then echo "{m} DONE $((i-{start})) limited"; exit 0; fi
   echo $i > /tmp/seed.txt
   timeout {PER_RUN_SECONDS}s /tmp/gen $i < /tmp/seed.txt 2>/tmp/gen.err | head -c 1000000 > /tmp/in.txt
   s=${{PIPESTATUS[0]}}
@@ -237,7 +238,7 @@ echo "{m} DONE {tests} full"
 """
 
 
-def _stress_docker(sources: dict[str, str], tests: int) -> dict:
+def _stress_docker(sources: dict[str, str], tests: int, start: int = 1) -> dict:
     if not sandbox.docker_available():
         raise DockerUnavailable(
             "Không kết nối được Docker. Hãy mở Docker Desktop và chạy: docker pull gcc:14"
@@ -249,7 +250,7 @@ def _stress_docker(sources: dict[str, str], tests: int) -> dict:
         total_timeout = 3 * COMPILE_TIMEOUT_SECONDS + BUDGET_SECONDS + 15
         try:
             proc = subprocess.run(
-                _container_base(work) + ["bash", "-c", _docker_script(tests)],
+                _container_base(work) + ["bash", "-c", _docker_script(tests, start)],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=total_timeout, check=False,
             )
@@ -258,10 +259,10 @@ def _stress_docker(sources: dict[str, str], tests: int) -> dict:
                     "message": "Quá trình tìm lỗi vượt thời gian chờ tổng thể."}
         except OSError as exc:
             raise RunnerError(f"Không thể gọi Docker: {exc}") from exc
-    return _parse_docker_output(proc.stdout, tests)
+    return _parse_docker_output(proc.stdout, start)
 
 
-def _parse_docker_output(stdout: str, tests: int) -> dict:
+def _parse_docker_output(stdout: str, start: int = 1) -> dict:
     parts = re.split(rf"^{MARK} ", stdout, flags=re.M)
     sections = [p for p in parts[1:] if p.strip()]
     if not sections:
@@ -300,7 +301,7 @@ def _parse_docker_output(stdout: str, tests: int) -> dict:
             message = {139: "Segmentation fault (truy cập bộ nhớ không hợp lệ)",
                        136: "Lỗi số học (chia cho 0)", 134: "Chương trình bị hủy (abort)"
                        }.get(code, f"Kết thúc với exit code {code}")
-        return {"status": "found", "kind": kind, "seed": seed, "tests": seed,
+        return {"status": "found", "kind": kind, "seed": seed, "tests": seed - start + 1,
                 "input": named.get("IN", ""), "mine": named.get("MINE", ""),
                 "brute": named.get("BRUTE", ""), "stderr": named.get("ERR", ""), "message": message}
     return {"status": "error", "kind": "internal", "message": "Kết quả từ Docker không hợp lệ."}
