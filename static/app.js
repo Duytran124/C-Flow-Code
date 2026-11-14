@@ -1020,7 +1020,7 @@ const STRESS_HINTS = {
   gen: "Đọc seed từ argv[1] và in ra một test hợp lệ theo đề bài.",
 };
 
-const stressState = {tab: "mine", buffers: {mine: "", brute: BRUTE_HINT, gen: GEN_TEMPLATES.array}, preCode: "", running: false};
+const stressState = {cancel: false, tab: "mine", buffers: {mine: "", brute: BRUTE_HINT, gen: GEN_TEMPLATES.array}, preCode: "", running: false};
 
 function paintStressTabs() {
   document.querySelectorAll(".stress-tab").forEach((button) => {
@@ -1104,6 +1104,7 @@ function renderStressResult(data) {
   if (data.status === "ok") {
     setStressBadge("Không thấy lỗi", "success");
     box.appendChild(stressEl("p", "stress-verdict ok", `Không có khác biệt trong ${data.tests} test.`));
+    if (data.cancelled) box.appendChild(stressEl("p", "muted-text", "Bạn đã dừng sớm, chưa chạy hết số test đã chọn."));
     box.appendChild(stressEl("p", "muted-text", data.timeLimited
       ? "Đã dừng sớm vì hết thời gian cho phép. Có thể thử lại để chạy thêm test khác, hoặc rút gọn generator."
       : "Chưa tìm ra test sai không có nghĩa là code chắc chắn đúng. Thử thêm giá trị đặc biệt (n = 1, số âm, số bằng nhau…) trong generator."));
@@ -1182,23 +1183,52 @@ $("stress-run").addEventListener("click", async () => {
   $("stress-result").appendChild(stressEl("p", "muted-text", "Đang biên dịch và chạy các test. Có thể mất tới ~20 giây…"));
 
   try {
-    const response = await fetch("/api/stress", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({mine, brute, gen, tests: Number($("stress-tests").value)}),
-    });
-    if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      throw new Error(detail.detail ? JSON.stringify(detail.detail) : `HTTP ${response.status}`);
+    // Chạy theo từng đợt ngắn (mỗi đợt tiếp nối seed của đợt trước) cho tới khi đủ số test,
+    // nên máy chủ chậm chỉ làm lâu hơn chứ không làm mất test.
+    const total = Number($("stress-tests").value);
+    let done = 0;
+    let data = null;
+    stressState.cancel = false;
+    $("stress-stop").hidden = false;
+    while (done < total) {
+      const response = await fetch("/api/stress", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({mine, brute, gen, tests: total - done, start: done + 1}),
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.detail ? JSON.stringify(detail.detail) : `HTTP ${response.status}`);
+      }
+      data = await response.json();
+      if (data.status !== "ok") break;          // tìm thấy lỗi hoặc có lỗi khác: dừng ngay
+      done += Math.max(1, data.tests || 0);
+      if (done < total) {
+        if (stressState.cancel) break;
+        $("stress-run-label").textContent = `Đã thử ${done}/${total} test…`;
+        $("stress-result").textContent = "";
+        $("stress-result").appendChild(stressEl("p", "muted-text", `Đã chạy ${done}/${total} test, chưa thấy khác biệt. Đang chạy tiếp…`));
+      }
     }
-    renderStressResult(await response.json());
+    if (data && data.status === "ok") {
+      data.tests = done;
+      data.timeLimited = false;
+      data.cancelled = done < total;
+    }
+    renderStressResult(data);
   } catch (error) {
     setStressBadge("Lỗi kết nối", "error");
     $("stress-result").textContent = "";
     $("stress-result").appendChild(stressEl("p", "stress-verdict bad", `Không gọi được API: ${error.message}`));
   } finally {
     stressState.running = false;
+    $("stress-stop").hidden = true;
     $("stress-run").disabled = false;
     $("stress-run-label").textContent = "Tìm lỗi";
   }
+});
+
+$("stress-stop").addEventListener("click", () => {
+  stressState.cancel = true;
+  $("stress-stop").hidden = true;
 });

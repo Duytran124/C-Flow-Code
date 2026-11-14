@@ -230,3 +230,4 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .stress-verdict.ok { color: #5eead4; }
 .stress-verdict.bad { color: #fda4af; }
 @media (max-width: 720px) { .stress-cols { grid-template-columns: 1fr; } }
+.stress-stop-row { text-align: center; margin-top: 6px; }
