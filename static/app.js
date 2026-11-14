@@ -1120,7 +1120,16 @@ function renderStressResult(data) {
     setStressBadge("Tìm thấy lỗi", "error");
     box.appendChild(stressEl("p", "stress-verdict bad", `${labels[data.kind] || "Có lỗi"} ở test #${data.seed}`));
     if (data.message) box.appendChild(stressEl("p", "muted-text", data.message));
-    box.appendChild(stressBlock("Input của test lỗi", data.input || ""));
+    const inputSize = typeof data.inputSize === "number" ? data.inputSize : (data.input || "").length;
+    const tooBig = inputSize > 20000;     // ô Input của web nhận tối đa 20.000 ký tự
+    const clipped = (data.input || "").includes("[đã cắt bớt]") || inputSize > (data.input || "").length;
+    if (clipped) {
+      box.appendChild(stressEl("p", "stress-verdict bad",
+        `Cảnh báo: input của test này dài ${inputSize.toLocaleString("vi-VN")} ký tự nên chỉ hiện phần đầu. ` +
+        "Nếu bạn copy phần này ra chạy ở máy thì sẽ ra kết quả KHÁC (vì thiếu dữ liệu). " +
+        "Hãy giảm giới hạn trong Generator (ví dụ n ≤ 8, m ≤ 10) để test lỗi ngắn, đọc được và chạy lại được."));
+    }
+    box.appendChild(stressBlock("Input của test lỗi" + (clipped ? " (chỉ phần đầu)" : ""), data.input || ""));
     const cols = stressEl("div", "stress-cols");
     cols.appendChild(stressBlock("Code của bạn in ra", data.mine || "", "bad"));
     cols.appendChild(stressBlock("Code đúng in ra", data.brute || "", "good"));
@@ -1137,7 +1146,7 @@ function renderStressResult(data) {
     const debug = stressEl("button", "share-button", "Debug với input này");
     debug.type = "button";
     debug.addEventListener("click", () => useInputFromStress(data.input || "", "debug"));
-    actions.append(run, debug, copy);
+    if (!tooBig && !clipped) actions.append(run, debug, copy);
     box.appendChild(actions);
     return;
   }
