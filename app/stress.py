@@ -134,6 +134,21 @@ def _describe_exit(status: int) -> str:
     return f"Kết thúc với exit code {status}"
 
 
+def _gen_fail_message(code: int) -> str:
+    """Giải thích vì sao generator thất bại, theo mã thoát (124 = quá giờ, 128+n = tín hiệu n)."""
+    if code == 124:
+        return (f"Generator chạy quá {PER_RUN_SECONDS} giây. Thường do vòng lặp không bao giờ kết thúc, "
+                "ví dụ `while` chờ đủ m cạnh/số khác nhau nhưng không còn gì để thêm "
+                "(m lớn hơn số khả năng), hoặc đọc input bằng cin trong khi seed nằm ở argv[1].")
+    if code == 139:
+        return "Generator bị Segmentation fault (truy cập ngoài mảng / vector rỗng, hoặc argv[1] không tồn tại)."
+    if code == 134:
+        return "Generator bị hủy (abort): thường do exception, ví dụ chia cho 0 hoặc vector::at ngoài phạm vi."
+    if code == 136:
+        return "Generator bị lỗi số học (chia cho 0, thường là phép % với số 0)."
+    return f"Generator kết thúc với exit code {code}. Hàm main phải `return 0;` khi chạy xong."
+
+
 def _stress_direct(sources: dict[str, str], tests: int, start: int = 1) -> dict:
     try:
         with sandbox.run_slot(), tempfile.TemporaryDirectory(prefix="cpp-flow-stress-") as temp:
@@ -152,7 +167,8 @@ def _stress_direct(sources: dict[str, str], tests: int, start: int = 1) -> dict:
                 g_status, g_timeout, test_input, g_err = _run_one(work, "gen", [str(seed)], work / "seed.txt", "gen")
                 if g_timeout or g_status != 0:
                     return {"status": "error", "kind": "generator", "seed": seed,
-                            "message": ("Generator chạy quá giờ." if g_timeout else _describe_exit(g_status)),
+                            "message": (_gen_fail_message(124) if g_timeout else
+                                (_gen_fail_message(128 - g_status) if g_status < 0 else _gen_fail_message(g_status))),
                             "stderr": _clip(g_err, 2000)}
                 (work / "test.txt").write_text(test_input, encoding="utf-8")
 
@@ -282,7 +298,7 @@ def _parse_docker_output(stdout: str, start: int = 1) -> dict:
                 "timeLimited": len(first) > 2 and first[2] == "limited"}
     if tag == "GENFAIL":
         return {"status": "error", "kind": "generator", "seed": int(first[1]),
-                "message": "Generator bị lỗi hoặc chạy quá giờ.", "stderr": _clip(body(sections[0]), 2000)}
+                "message": _gen_fail_message(int(first[2])), "stderr": _clip(body(sections[0]), 2000)}
 
     named: dict[str, str] = {}
     for sec in sections[1:]:
