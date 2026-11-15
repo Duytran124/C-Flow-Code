@@ -165,3 +165,9 @@ cấp phát quá lớn, thiếu return, ngoại lệ không bắt, lỗi heap. G
 Có thêm bộ PCH `/opt/pch-crash` (biến môi trường `CPPFLOW_PCH_CRASH_DIR`) để biên dịch nhanh.
 (v17) "Kiểm tra lỗi ngầm" giờ cũng báo **tràn số nguyên có dấu** (`-fsanitize=signed-integer-overflow`, chỉ báo cáo rồi chạy tiếp):
 GDB dừng ở lần tràn đầu tiên để lấy dòng và giá trị biến, rồi chạy tiếp.
+
+## Phát lại như video v18
+Ở chế độ Debug, mọi bước đều được ghi lại (tối đa 1500 bước). Thanh phát lại cho phép lùi/tiến, kéo thanh tua, phát tự động,
+nút **Ghi cả chương trình** (chạy nhanh hết chương trình để ghi), **Chia sẻ link** (dữ liệu nén trong phần `#` của URL, không lưu gì trên máy chủ)
+và **Tải file .html** (một file duy nhất chứa cả web + bản ghi, mở offline bằng trình duyệt). Người xem chỉ thấy chế độ phát lại,
+có nút "Tự thử với code này" để nạp code vào web.
