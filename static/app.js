@@ -322,7 +322,19 @@ function showDuration(data) {
   }
 }
 
+let lastRun = {code: "", input: ""};
+let crashButtonLabel = "Giải thích vì sao lỗi";
+
+function resetCrashBox() {
+  $("crash-box").hidden = true;
+  $("crash-box").textContent = "";
+  $("explain-crash").hidden = true;
+  $("explain-crash").disabled = false;
+  $("explain-crash").textContent = crashButtonLabel;
+}
+
 function clearOutput() {
+  resetCrashBox();
   $("stdout").textContent = "Kết quả chương trình sẽ xuất hiện ở đây.";
   $("stdout").classList.remove("empty");
   $("stderr").textContent = "Chưa có lỗi.";
@@ -392,6 +404,12 @@ $("run").addEventListener("click", async () => {
     $("run-state").textContent = data.status === "success" ? "Chạy hoàn tất" : "Cần kiểm tra";
     $("exit-code").textContent = `Exit code: ${data.exitCode ?? "—"}`;
     showDuration(data);
+    resetCrashBox();
+    lastRun = {code, input: $("stdin").value};
+    // Có nút cả khi chạy "thành công": nhiều lỗi (vượt mảng...) không crash mà chỉ làm kết quả sai.
+    $("explain-crash").hidden = !["runtime", "ok"].includes(data.kind);
+    crashButtonLabel = data.kind === "runtime" ? "Giải thích vì sao lỗi" : "Kiểm tra lỗi ngầm";
+    $("explain-crash").textContent = crashButtonLabel;
   } catch (error) {
     $("stdout").textContent = "(không có output)";
     $("stderr").textContent = `Không gọi được API: ${error.message}`;
@@ -1346,3 +1364,287 @@ async function runDiverge() {
   }
 }
 $("diverge-run").addEventListener("click", runDiverge);
+
+
+// ---- Giải thích vì sao crash (có hình minh họa) ----
+function esc(text) {
+  return String(text ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+}
+
+const SVG_HEAD = (h) => `<svg viewBox="0 0 640 ${h}" xmlns="http://www.w3.org/2000/svg" font-family="Manrope, system-ui, sans-serif" role="img">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#fb7185"/></marker>
+<marker id="arrg" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#9693aa"/></marker></defs>`;
+const C = {cell: "#232233", line: "#4b4a63", text: "#f0eff8", mute: "#9693aa", red: "#fb7185", redBg: "#3a1823", ok: "#5eead4"};
+
+function figOob(d) {
+  const n = d.size, idx = d.indexValue;
+  const all = n <= 10;
+  const slots = [];                                  // {i, gap}
+  if (all) for (let i = 0; i < n; i++) slots.push({i});
+  else { for (let i = 0; i < 4; i++) slots.push({i}); slots.push({gap: true}); for (let i = n - 3; i < n; i++) slots.push({i}); }
+  const bad = idx < 0 ? "before" : "after";
+  const list = bad === "before" ? [{bad: true}, ...slots] : [...slots, ...(idx > n ? [{gap: true}] : []), {bad: true}];
+  const W = 52;
+  const total = list.length * W;
+  const x0 = Math.max(16, (640 - total) / 2);
+  let out = SVG_HEAD(190);
+  let badX = 0;
+  list.forEach((slot, k) => {
+    const x = x0 + k * W;
+    if (slot.gap) { out += `<text x="${x + 22}" y="98" fill="${C.mute}" font-size="20" text-anchor="middle">…</text>`; return; }
+    if (slot.bad) {
+      badX = x;
+      out += `<rect x="${x}" y="70" width="46" height="46" rx="6" fill="${C.redBg}" stroke="${C.red}" stroke-width="2" stroke-dasharray="5 4"/>`;
+      out += `<text x="${x + 23}" y="98" fill="${C.red}" font-size="16" font-weight="800" text-anchor="middle">?</text>`;
+      out += `<text x="${x + 23}" y="138" fill="${C.red}" font-size="12" font-weight="800" text-anchor="middle">${esc(idx)}</text>`;
+      return;
+    }
+    const val = d.values && d.values[slot.i] !== undefined ? d.values[slot.i] : "";
+    out += `<rect x="${x}" y="70" width="46" height="46" rx="6" fill="${C.cell}" stroke="${C.line}"/>`;
+    out += `<text x="${x + 23}" y="98" fill="${C.text}" font-size="13" font-family="monospace" text-anchor="middle">${esc(String(val).length > 6 ? String(val).slice(0, 5) + "…" : val)}</text>`;
+    out += `<text x="${x + 23}" y="138" fill="${C.mute}" font-size="12" text-anchor="middle">${slot.i}</text>`;
+  });
+  const label = d.base && d.base !== "?" ? `${d.expr || d.base + "[" + d.index + "]"}` : `chỉ số ${idx}`;
+  out += `<line x1="${badX + 23}" y1="34" x2="${badX + 23}" y2="64" stroke="${C.red}" stroke-width="2.5" marker-end="url(#arr)"/>`;
+  out += `<text x="${badX + 23}" y="24" fill="${C.red}" font-size="13" font-weight="800" text-anchor="middle">${esc(label)}</text>`;
+  const first = x0 + (bad === "before" ? W : 0);
+  out += `<text x="${first}" y="172" fill="${C.ok}" font-size="12.5" font-weight="700">${d.base && d.base !== "?" ? esc(d.base) + " có " : "Có "}${n} phần tử: chỉ số hợp lệ từ 0 đến ${n - 1}</text>`;
+  return out + "</svg>";
+}
+
+function figNull(d) {
+  const name = d && d.name ? d.name : "con trỏ";
+  let out = SVG_HEAD(150);
+  out += `<rect x="60" y="45" width="170" height="56" rx="8" fill="${C.cell}" stroke="${C.line}"/>`;
+  out += `<text x="145" y="68" fill="${C.mute}" font-size="11" text-anchor="middle">${esc(d && d.type ? d.type : "con trỏ")}</text>`;
+  out += `<text x="145" y="90" fill="${C.text}" font-size="15" font-weight="800" font-family="monospace" text-anchor="middle">${esc(name)} = nullptr</text>`;
+  out += `<line x1="232" y1="73" x2="388" y2="73" stroke="${C.red}" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#arr)"/>`;
+  out += `<rect x="395" y="45" width="185" height="56" rx="8" fill="${C.redBg}" stroke="${C.red}" stroke-width="2" stroke-dasharray="5 4"/>`;
+  out += `<text x="487" y="78" fill="${C.red}" font-size="13" font-weight="800" text-anchor="middle">địa chỉ 0 (không có gì)</text>`;
+  out += `<text x="320" y="135" fill="${C.mute}" font-size="12.5" text-anchor="middle">Đọc/ghi qua con trỏ rỗng → hệ điều hành dừng chương trình</text>`;
+  return out + "</svg>";
+}
+
+function figDiv(d) {
+  const op = d && d.op === "%" ? "%" : "/";
+  const div = d && d.divisor ? d.divisor : "số chia";
+  let out = SVG_HEAD(150);
+  out += `<rect x="90" y="40" width="130" height="60" rx="8" fill="${C.cell}" stroke="${C.line}"/>`;
+  out += `<text x="155" y="76" fill="${C.text}" font-size="14" text-anchor="middle">số bị chia</text>`;
+  out += `<text x="260" y="82" fill="${C.text}" font-size="30" font-weight="800" text-anchor="middle">${op}</text>`;
+  out += `<rect x="300" y="40" width="150" height="60" rx="8" fill="${C.redBg}" stroke="${C.red}" stroke-width="2"/>`;
+  out += `<text x="375" y="64" fill="${C.mute}" font-size="11" text-anchor="middle">${esc(div)}</text>`;
+  out += `<text x="375" y="90" fill="${C.red}" font-size="22" font-weight="800" text-anchor="middle">= 0</text>`;
+  out += `<text x="500" y="82" fill="${C.text}" font-size="24" font-weight="800" text-anchor="middle">=</text>`;
+  out += `<text x="560" y="82" fill="${C.red}" font-size="26" font-weight="800" text-anchor="middle">✕</text>`;
+  out += `<text x="320" y="135" fill="${C.mute}" font-size="12.5" text-anchor="middle">Không có kết quả nào cho phép chia cho 0 → chương trình bị dừng</text>`;
+  return out + "</svg>";
+}
+
+function figStack(d) {
+  const frames = (d.stack || []).filter((f) => f.args && f.args.length).slice(0, 3);
+  const depth = d.capped ? `hơn ${d.totalFrames.toLocaleString("vi-VN")}` : d.userFrames.toLocaleString("vi-VN");
+  const fn = d.func || "f";
+  const label = (f) => `${f.func}(${f.args.map((a) => `${a[0]}=${a[1]}`).join(", ")})`;
+  let out = SVG_HEAD(300);
+  let y = 262;
+  const box = (text, fill, stroke, color = C.text) => {
+    out += `<rect x="170" y="${y}" width="300" height="32" rx="6" fill="${fill}" stroke="${stroke}"/>`;
+    out += `<text x="320" y="${y + 21}" fill="${color}" font-size="13" font-family="monospace" text-anchor="middle">${esc(text)}</text>`;
+    y -= 40;
+  };
+  box("main()", C.cell, C.line);
+  out += `<text x="320" y="${y + 24}" fill="${C.mute}" font-size="14" text-anchor="middle">⋮ ${esc(depth)} lần gọi ${esc(fn)}() ⋮</text>`;
+  y -= 34;
+  frames.slice().reverse().forEach((f) => box(label(f), C.cell, C.line));
+  box("Hết chỗ trên stack → crash", C.redBg, C.red, C.red);
+  out += `<line x1="500" y1="250" x2="500" y2="40" stroke="${C.mute}" stroke-width="2" marker-end="url(#arrg)"/>`;
+  out += `<text x="512" y="150" fill="${C.mute}" font-size="12">gọi sâu thêm</text>`;
+  return out + "</svg>";
+}
+
+function figAlloc(d) {
+  const v = d.detail ? d.detail.value : null;
+  let big = "một số cực lớn";
+  if (v !== null && v < 0) big = (BigInt(2) ** BigInt(64) + BigInt(v)).toString();
+  else if (v !== null) big = Number(v).toLocaleString("vi-VN");
+  let out = SVG_HEAD(150);
+  out += `<rect x="40" y="40" width="190" height="60" rx="8" fill="${C.cell}" stroke="${C.line}"/>`;
+  out += `<text x="135" y="63" fill="${C.mute}" font-size="11" text-anchor="middle">${esc(d.detail ? d.detail.expr : "kích thước")}</text>`;
+  out += `<text x="135" y="88" fill="${C.text}" font-size="20" font-weight="800" text-anchor="middle">${esc(v === null ? "?" : v)}</text>`;
+  out += `<line x1="232" y1="70" x2="290" y2="70" stroke="${C.mute}" stroke-width="2" marker-end="url(#arrg)"/>`;
+  out += `<rect x="295" y="40" width="300" height="60" rx="8" fill="${C.redBg}" stroke="${C.red}" stroke-width="2"/>`;
+  out += `<text x="445" y="63" fill="${C.mute}" font-size="11" text-anchor="middle">${v !== null && v < 0 ? "số âm bị đổi thành số không dấu" : "số phần tử cần cấp phát"}</text>`;
+  out += `<text x="445" y="88" fill="${C.red}" font-size="${big.length > 14 ? 14 : 18}" font-weight="800" text-anchor="middle">${esc(big)}</text>`;
+  out += `<text x="320" y="135" fill="${C.mute}" font-size="12.5" text-anchor="middle">Máy không có đủ bộ nhớ cho chừng đó phần tử → bad_alloc / length_error</text>`;
+  return out + "</svg>";
+}
+
+function figNoReturn(d) {
+  let out = SVG_HEAD(150);
+  out += `<rect x="40" y="45" width="150" height="50" rx="8" fill="${C.cell}" stroke="${C.line}"/>`;
+  out += `<text x="115" y="75" fill="${C.text}" font-size="13" text-anchor="middle">vào ${esc(d.func || "hàm")}()</text>`;
+  out += `<line x1="192" y1="70" x2="240" y2="70" stroke="${C.mute}" stroke-width="2" marker-end="url(#arrg)"/>`;
+  out += `<rect x="245" y="45" width="170" height="50" rx="8" fill="${C.cell}" stroke="${C.line}"/>`;
+  out += `<text x="330" y="67" fill="${C.text}" font-size="12" text-anchor="middle">các điều kiện if</text>`;
+  out += `<text x="330" y="84" fill="${C.mute}" font-size="11" text-anchor="middle">không nhánh nào return</text>`;
+  out += `<line x1="417" y1="70" x2="455" y2="70" stroke="${C.red}" stroke-width="2.5" marker-end="url(#arr)"/>`;
+  out += `<rect x="460" y="45" width="150" height="50" rx="8" fill="${C.redBg}" stroke="${C.red}" stroke-width="2"/>`;
+  out += `<text x="535" y="67" fill="${C.red}" font-size="13" font-weight="800" text-anchor="middle">gặp dấu }</text>`;
+  out += `<text x="535" y="84" fill="${C.red}" font-size="11" text-anchor="middle">mà chưa return</text>`;
+  out += `<text x="320" y="135" fill="${C.mute}" font-size="12.5" text-anchor="middle">Hàm có kiểu trả về nhưng có đường chạy kết thúc mà không return</text>`;
+  return out + "</svg>";
+}
+
+function figChain(d) {
+  const frames = (d.stack || []).slice().reverse().slice(-5);
+  let out = SVG_HEAD(150);
+  const w = Math.min(150, 560 / Math.max(1, frames.length) - 20);
+  frames.forEach((f, k) => {
+    const x = 40 + k * (w + 30);
+    const last = k === frames.length - 1;
+    out += `<rect x="${x}" y="45" width="${w}" height="56" rx="8" fill="${last ? C.redBg : C.cell}" stroke="${last ? C.red : C.line}" stroke-width="${last ? 2 : 1}"/>`;
+    out += `<text x="${x + w / 2}" y="68" fill="${last ? C.red : C.text}" font-size="13" font-weight="800" font-family="monospace" text-anchor="middle">${esc(f.func)}()</text>`;
+    out += `<text x="${x + w / 2}" y="88" fill="${C.mute}" font-size="11" text-anchor="middle">dòng ${esc(f.line)}</text>`;
+    if (!last) out += `<line x1="${x + w + 2}" y1="73" x2="${x + w + 26}" y2="73" stroke="${C.mute}" stroke-width="2" marker-end="url(#arrg)"/>`;
+  });
+  out += `<text x="320" y="135" fill="${C.mute}" font-size="12.5" text-anchor="middle">Chuỗi hàm đang chạy lúc lỗi (hàm cuối là nơi xảy ra lỗi)</text>`;
+  return out + "</svg>";
+}
+
+function crashText(d) {
+  const line = d.line ? `dòng ${d.line}` : "một dòng trong code";
+  const tips = [];
+  const dt = d.detail;
+  switch (d.kind) {
+    case "oob": {
+      const named = dt.base && dt.base !== "?";
+      const what = dt.containerKind === "vector" ? "vector" : dt.containerKind === "string" ? "string" : "mảng";
+      const idxText = named ? `<code>${esc(dt.expr || `${dt.base}[${dt.index}]`)}</code> với chỉ số <b>${esc(dt.indexValue)}</b>` : `chỉ số <b>${esc(dt.indexValue)}</b>`;
+      let why = `Ở ${line}, code truy cập ${idxText}, nhưng ${named ? `<code>${esc(dt.base)}</code>` : what} chỉ có <b>${dt.size}</b> phần tử (chỉ số hợp lệ: 0 … ${dt.size - 1}).`;
+      if (dt.indexValue === dt.size) tips.push("Chỉ số vượt đúng 1 ô: thường do vòng lặp dùng <code>&lt;=</code> thay vì <code>&lt;</code>, hoặc đánh số từ 1 mà mảng chỉ khai báo đủ n phần tử (cần <code>n + 1</code>).");
+      if (dt.indexValue < 0) tips.push("Chỉ số âm: kiểm tra phép trừ như <code>i - 1</code> khi <code>i = 0</code>, hoặc biến chưa được gán giá trị.");
+      if (dt.indexValue > dt.size) tips.push("Chỉ số lớn hơn hẳn kích thước: kiểm tra xem kích thước mảng/vector có theo đúng giới hạn của đề không, và chỉ số có bị tính sai không.");
+      tips.push("In ra hoặc debug giá trị của biến chỉ số ngay trước dòng này để xem vì sao nó có giá trị đó.");
+      if (dt.containerKind === "array") tips.push("Lưu ý: với mảng thường, lỗi này nhiều khi KHÔNG crash khi chạy bình thường mà chỉ làm kết quả sai (ghi đè ô nhớ khác). Lần này web bật chế độ kiểm tra nên bắt được.");
+      return {title: `Truy cập ngoài phạm vi ${what}`, why, tips, fig: figOob(dt)};
+    }
+    case "stack_overflow":
+      return {title: "Tràn stack: hàm tự gọi lại quá sâu",
+        why: `Hàm <code>${esc(d.func)}()</code> đã gọi lồng nhau ${d.capped ? "hơn " + d.totalFrames.toLocaleString("vi-VN") : "khoảng " + d.userFrames.toLocaleString("vi-VN")} tầng mà chưa dừng. Mỗi lần gọi hàm chiếm một ít bộ nhớ stack (khoảng 8 MB), hết chỗ thì hệ điều hành dừng chương trình (SIGSEGV).`,
+        tips: ["Kiểm tra <b>điều kiện dừng</b> của đệ quy: có đường nào không bao giờ chạm tới nó không (ví dụ tham số tăng thay vì giảm)?", "Nếu đệ quy hợp lệ nhưng sâu tới hàng trăm nghìn tầng, hãy đổi sang vòng lặp hoặc dùng stack tự quản lý.", "Xem phần Call stack bên dưới: giá trị tham số ở các tầng cho thấy nó đang đi theo hướng nào."],
+        fig: figStack(d)};
+    case "div0":
+      return {title: "Chia cho 0",
+        why: `Ở ${line}, phép <code>${esc(dt ? dt.expr : "chia")}</code> có số chia ${dt ? `<code>${esc(dt.divisor)}</code> ` : ""}bằng <b>0</b>.`,
+        tips: ["Kiểm tra trước khi chia: <code>if (b != 0)</code>.", "Tìm xem vì sao số chia bằng 0: biến chưa gán, đọc input sai, hoặc phép tính trước đó ra 0 (ví dụ <code>n - n</code>, phép chia nguyên làm tròn xuống 0)."],
+        fig: figDiv(dt)};
+    case "null":
+    case "segv": {
+      const nm = dt && dt.name ? `<code>${esc(dt.name)}</code>` : "một con trỏ";
+      return {title: d.kind === "null" ? "Dùng con trỏ rỗng (nullptr)" : "Truy cập vùng nhớ không hợp lệ",
+        why: d.kind === "null" ? `Ở ${line}, ${nm} đang bằng <b>nullptr</b> (địa chỉ 0) nhưng code vẫn đọc/ghi qua nó.` : `Ở ${line}, chương trình đọc/ghi vào một địa chỉ bộ nhớ không thuộc về nó${d.faultAddr != null ? ` (địa chỉ 0x${Number(d.faultAddr).toString(16)})` : ""}.`,
+        tips: ["Kiểm tra con trỏ trước khi dùng: <code>if (p != nullptr)</code>.", "Xem lại chỗ gán/tạo con trỏ (<code>new</code>, kết quả tìm kiếm, <code>find</code>...), có trường hợp nó trả về rỗng không?", "Nếu dùng chỉ số mảng rất lớn/âm làm địa chỉ bị lệch xa, hãy kiểm tra các biến chỉ số ở dòng này."],
+        fig: d.kind === "null" ? figNull(dt) : figChain(d)};
+    }
+    case "alloc":
+      return {title: "Xin cấp phát quá nhiều bộ nhớ",
+        why: `Ở ${line}, code xin tạo một vùng nhớ có kích thước ${dt ? `<code>${esc(dt.expr)}</code> = <b>${esc(dt.value)}</b>` : "quá lớn"}${dt && dt.value < 0 ? ". Số âm khi đưa vào kích thước (kiểu không dấu) biến thành một số khổng lồ" : ""}.`,
+        tips: ["In ra giá trị kích thước trước khi tạo vector/mảng để xem có bị âm hoặc quá lớn không.", "Kiểm tra đã đọc đúng input chưa (thứ tự đọc n, m, ...).", "Nếu cần mảng lớn thật, đặt nó ở phạm vi toàn cục hoặc giảm kích thước."],
+        fig: figAlloc(d)};
+    case "noreturn":
+      return {title: "Hàm thiếu lệnh return",
+        why: `Hàm <code>${esc(d.func || "")}()</code> có kiểu trả về, nhưng khi chạy tới dấu <code>}</code> ở ${line} thì chưa gặp <code>return</code> nào. Hành vi này không xác định, thường gây crash hoặc kết quả sai.`,
+        tips: ["Thêm <code>return</code> cho mọi nhánh, kể cả nhánh <code>else</code> cuối cùng.", "Kiểm tra các điều kiện <code>if</code> có bao phủ hết mọi trường hợp (ví dụ x = 0, giá trị âm) không."],
+        fig: figNoReturn(d)};
+    case "stl_assert":
+      return {title: "Dùng sai hàm của thư viện chuẩn (STL)",
+        why: `Ở ${line}, thư viện chuẩn phát hiện thao tác không hợp lệ: <code>${esc(d.message)}</code>. Hay gặp nhất là gọi <code>back()</code>, <code>front()</code>, <code>pop_back()</code>, <code>top()</code> trên container RỖNG, hoặc dùng iterator sai.`,
+        tips: ["Kiểm tra <code>empty()</code> trước khi lấy phần tử.", "Kiểm tra iterator có bằng <code>end()</code> không trước khi dùng <code>*it</code>."],
+        fig: figChain(d)};
+    case "exception":
+      return {title: `Ném ngoại lệ ${d.exception} mà không ai bắt`,
+        why: `Ở ${line}, chương trình ném ngoại lệ <code>${esc(d.exception)}</code>${d.message ? `: <b>${esc(d.message)}</b>` : ""} và không có <code>catch</code> nào xử lý nên chương trình bị dừng.`,
+        tips: ["Đọc thông điệp lỗi ở trên để biết nguyên nhân (ví dụ <code>stoi</code> với chuỗi không phải số, <code>.at()</code> ngoài biên, <code>map.at</code> với khóa chưa có).", "Nếu muốn chương trình tiếp tục, bọc đoạn đó trong <code>try { ... } catch (...) { ... }</code>."],
+        fig: figChain(d)};
+    case "memory":
+      return {title: "Lỗi quản lý bộ nhớ (heap/stack bị hỏng)",
+        why: `Thư viện phát hiện bộ nhớ bị ghi đè hoặc giải phóng sai: <code>${esc(d.message)}</code>. Nguyên nhân thường gặp: <code>delete</code> 2 lần, <code>delete</code> con trỏ không phải do <code>new</code>, hoặc ghi vượt biên mảng ở đâu đó TRƯỚC dòng báo lỗi.`,
+        tips: ["Tìm các chỗ ghi vào mảng/vector bằng chỉ số có thể vượt biên (dùng tab Tìm lỗi hoặc chạy debug).", "Mỗi <code>new</code> chỉ nên có đúng một <code>delete</code>; dùng <code>vector</code>/<code>unique_ptr</code> thay cho <code>new/delete</code> thủ công."],
+        fig: figChain(d)};
+    default:
+      return {title: `Chương trình bị dừng bởi tín hiệu ${d.signal || ""}`,
+        why: `Chương trình dừng ở ${line}${d.func ? ` trong hàm <code>${esc(d.func)}()</code>` : ""}.${d.ubMessage ? ` Thông báo: <code>${esc(d.ubMessage)}</code>.` : ""}${d.message ? ` Thông báo: <code>${esc(d.message)}</code>.` : ""}`,
+        tips: ["Xem Call stack và giá trị biến bên dưới để biết trạng thái lúc lỗi.", "Bấm chế độ Debug và đi từng bước tới dòng này với cùng input."],
+        fig: figChain(d)};
+  }
+}
+
+function renderCrash(data) {
+  const box = $("crash-box");
+  box.textContent = "";
+  box.hidden = false;
+  const add = (tag, cls, html) => { const n = document.createElement(tag); if (cls) n.className = cls; if (html !== undefined) n.innerHTML = html; box.appendChild(n); return n; };
+
+  if (data.status !== "ok") {
+    add("h3", "", data.kind === "compile" ? "Lỗi biên dịch" : "Chưa giải thích được");
+    add("p", "", esc(data.message || "Có lỗi xảy ra."));
+    return;
+  }
+  if (data.kind === "no_crash") {
+    add("h3", "", "Không phát hiện lỗi ngầm hay crash với input này");
+    add("p", "", `Đã chạy lại với chế độ kiểm tra (chỉ số mảng/vector, con trỏ null, chia 0, thiếu return), chương trình thoát bình thường${data.exitCode ? ` với mã <b>${esc(data.exitCode)}</b> (code tự trả về mã khác 0, ví dụ <code>return ${esc(data.exitCode)};</code> trong <code>main</code> hoặc <code>exit(${esc(data.exitCode)})</code>)` : ""}.`);
+    add("p", "", "Nếu trên máy khác vẫn bị lỗi, hãy kiểm tra input có giống hệt không (bao gồm cả khoảng trắng và dòng cuối).");
+    return;
+  }
+  if (data.kind === "timeout") {
+    add("h3", "", "Chương trình chạy quá lâu");
+    add("p", "", "Nó không kết thúc trong thời gian cho phép (có thể là vòng lặp vô hạn hoặc thuật toán quá chậm), nên không có crash để giải thích. Hãy dùng chế độ Debug để xem vòng lặp đang quanh quẩn ở đâu.");
+    return;
+  }
+
+  const t = crashText(data);
+  add("h3", "", esc(t.title));
+  add("p", "", t.why);
+  const fig = add("div", "crash-fig");
+  fig.innerHTML = t.fig;
+  if (data.lineText && data.line) add("div", "crash-src", `${esc(data.line)} │ ${esc(data.lineText)}`);
+  const ul = add("div", "");
+  ul.innerHTML = `<p><b>Cách xử lý gợi ý</b></p><ul class="crash-tips">${t.tips.map((x) => `<li>${x}</li>`).join("")}</ul>`;
+
+  if ((data.stack && data.stack.length) || (data.locals && data.locals.length)) {
+    const det = add("details", "crash-stack");
+    const frames = (data.stack || []).map((f) => `<li>${esc(f.func)}(${esc((f.args || []).map((a) => `${a[0]}=${a[1]}`).join(", "))}) — dòng ${esc(f.line)}</li>`).join("");
+    const locals = (data.locals || []).map((v) => `<li>${esc(v[0])} = ${esc(v[1])}</li>`).join("");
+    det.innerHTML = `<summary>Call stack và giá trị biến lúc lỗi</summary>` +
+      (frames ? `<p>Các hàm đang chạy (mới nhất ở trên):</p><ol>${frames}</ol>` : "") +
+      (locals ? `<p>Biến trong hàm <code>${esc(data.func)}</code>:</p><ol>${locals}</ol>` : "");
+  }
+  if (data.stderr) {
+    const det = add("details", "crash-stack");
+    det.innerHTML = `<summary>Thông báo gốc của chương trình</summary><div class="crash-src">${esc(data.stderr)}</div>`;
+  }
+}
+
+$("explain-crash").addEventListener("click", async () => {
+  const button = $("explain-crash");
+  button.disabled = true;
+  button.textContent = "Đang phân tích…";
+  const box = $("crash-box");
+  box.hidden = false;
+  box.textContent = "Đang chạy lại chương trình với chế độ kiểm tra, có thể mất 5–30 giây…";
+  try {
+    const response = await fetch("/api/crash", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({code: lastRun.code, input: lastRun.input}),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderCrash(await response.json());
+  } catch (error) {
+    box.textContent = `Không gọi được API: ${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Phân tích lại";
+  }
+});

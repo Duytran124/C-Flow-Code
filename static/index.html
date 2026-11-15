@@ -138,8 +138,12 @@
           <section class="panel result-panel" aria-label="Kết quả">
             <div class="panel-heading">
               <div class="panel-title"><strong>Kết quả</strong><span id="result-badge" class="result-badge neutral">Chưa chạy</span></div>
-              <button type="button" id="clear-output" class="text-button">Xóa kết quả</button>
+              <span class="heading-actions">
+                <button type="button" id="explain-crash" class="share-button" hidden>Giải thích vì sao lỗi</button>
+                <button type="button" id="clear-output" class="text-button">Xóa kết quả</button>
+              </span>
             </div>
+            <div id="crash-box" class="crash-box" hidden></div>
             <div class="result-body">
               <div class="output-section"><div class="output-label"><span class="output-mark success-mark"></span> STDOUT</div><pre id="stdout" class="output-content">Kết quả chương trình sẽ xuất hiện ở đây.</pre></div>
               <div class="output-section"><div class="output-label"><span class="output-mark error-mark"></span> STDERR / LỖI</div><pre id="stderr" class="output-content empty">Chưa có lỗi.</pre></div>
