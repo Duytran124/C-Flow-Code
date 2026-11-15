@@ -25,7 +25,9 @@ MAX_INPUT_CHARS = 20_000
 GDB_TIMEOUT_SECONDS = 20
 FLAGS = [
     "-std=c++20", "-g", "-O0", "-fno-omit-frame-pointer", "-D_GLIBCXX_ASSERTIONS",
-    "-fsanitize=bounds,null,integer-divide-by-zero,return", "-fno-sanitize-recover=all",
+    # Các lỗi nghiêm trọng thì dừng ngay; tràn số nguyên chỉ báo cáo rồi chạy tiếp.
+    "-fsanitize=bounds,null,integer-divide-by-zero,return,signed-integer-overflow",
+    "-fno-sanitize-recover=bounds,null,integer-divide-by-zero,return",
 ]
 
 TRACER = r'''
@@ -46,8 +48,18 @@ for cmd in ("set pagination off", "set confirm off", "set print elements 24",
     except Exception:
         pass
 
+import os
+SRC_PATH = os.path.join(os.path.dirname(OUT_JSON), SRC)
 HEX = re.compile(r"0x[0-9a-fA-F]{5,}")
 result = {"stopped": False}
+state = {"ovf": False}
+
+
+def read_src_line(line):
+    try:
+        return open(SRC_PATH, encoding="utf-8", errors="replace").read().split("\n")[line - 1]
+    except Exception:
+        return ""
 
 
 def norm(v, limit=120):
@@ -288,6 +300,8 @@ def find_alloc(text):
 def on_stop(event):
     if isinstance(event, gdb.SignalEvent):
         result["signal"] = event.stop_signal
+    elif isinstance(event, gdb.BreakpointEvent):
+        state["ovf"] = True
 
 
 def on_exit(event):
@@ -295,12 +309,57 @@ def on_exit(event):
     result["exitCode"] = code if code is not None else 0
 
 
+def overflow_snapshot():
+    try:
+        f = gdb.newest_frame()
+        for _ in range(40):
+            if f is None:
+                break
+            if user_frame_of(f):
+                line = f.find_sal().line
+                return {"line": line, "func": f.name() or "?", "locals": frame_locals(f, line),
+                        "args": frame_args(f), "lineText": read_src_line(line)}
+            f = f.older()
+    except Exception:
+        pass
+    return None
+
+
 gdb.events.stop.connect(on_stop)
 gdb.events.exited.connect(on_exit)
+ovf_bps = []
 try:
-    gdb.execute("run < %s > %s 2> %s" % (STDIN_FILE, STDOUT_FILE, STDERR_FILE), to_string=True)
-except Exception as exc:
-    result["error"] = str(exc)
+    gdb.execute("set breakpoint pending on", to_string=True)
+    for fn in ("__ubsan_handle_add_overflow", "__ubsan_handle_sub_overflow",
+               "__ubsan_handle_mul_overflow", "__ubsan_handle_negate_overflow"):
+        try:
+            ovf_bps.append(gdb.Breakpoint(fn))
+        except Exception:
+            pass
+except Exception:
+    pass
+
+command = "run < %s > %s 2> %s" % (STDIN_FILE, STDOUT_FILE, STDERR_FILE)
+for _round in range(3):
+    try:
+        gdb.execute(command, to_string=True)
+    except Exception as exc:
+        result["error"] = str(exc)
+        break
+    if state["ovf"] and gdb.selected_inferior().pid:
+        state["ovf"] = False
+        if "overflow" not in result:
+            snap = overflow_snapshot()
+            if snap:
+                result["overflow"] = snap
+        for b in ovf_bps:
+            try:
+                b.enabled = False
+            except Exception:
+                pass
+        command = "continue"
+        continue
+    break
 
 if result.get("signal") and gdb.selected_inferior().pid:
     result["stopped"] = True
@@ -341,13 +400,8 @@ if result.get("signal") and gdb.selected_inferior().pid:
         result["locals"] = frame_locals(first_user, line)
         result["args"] = frame_args(first_user)
 
-import os
-SRC_PATH = os.path.join(os.path.dirname(OUT_JSON), SRC)
 if result.get("line"):
-    try:
-        text = open(SRC_PATH, encoding="utf-8", errors="replace").read().split("\n")[result["line"] - 1]
-    except Exception:
-        text = ""
+    text = read_src_line(result["line"])
     result["lineText"] = text
     result["analysis"] = {}
     try:
@@ -482,7 +536,27 @@ fi
 # --------------------------------------------------------------------------------------
 UB_LOC = re.compile(r"main\.cpp:(\d+):\d+: runtime error: (.*)")
 RANGE_CHECK = re.compile(r"__n \(which is (-?\d+)\) >= this->size\(\) \(which is (\d+)\)")
+OVF_BIN = re.compile(r"main\.cpp:(\d+):\d+: runtime error: signed integer overflow: (-?\d+) ([+\-*]) (-?\d+) cannot be represented in type '([^']+)'")
+OVF_NEG = re.compile(r"main\.cpp:(\d+):\d+: runtime error: negation of (-?\d+) cannot be represented in type '([^']+)'")
+TYPE_BITS = {"int": 32, "long": 64, "long int": 64, "long long": 64, "long long int": 64, "short": 16,
+             "signed char": 8, "short int": 16}
 UB_INDEX = re.compile(r"index (-?\d+) out of bounds for type '([^']+)'")
+
+
+def _overflow_info(stderr: str, snap: dict | None) -> dict | None:
+    found = OVF_BIN.search(stderr)
+    neg = None if found else OVF_NEG.search(stderr)
+    if not found and not neg:
+        return None
+    count = len(OVF_BIN.findall(stderr)) + len(OVF_NEG.findall(stderr))
+    if found:
+        line, a, op, b, typ = int(found.group(1)), found.group(2), found.group(3), found.group(4), found.group(5)
+    else:
+        line, a, op, b, typ = int(neg.group(1)), neg.group(2), "neg", None, neg.group(3)
+    info = {"line": line, "a": a, "op": op, "b": b, "type": typ, "bits": TYPE_BITS.get(typ, 32), "places": count}
+    if snap:
+        info.update({k: snap.get(k) for k in ("func", "locals", "lineText")})
+    return info
 
 
 def _build(work: Path) -> dict:
@@ -504,10 +578,16 @@ def _build(work: Path) -> dict:
         "locals": data.get("locals", []), "userFrames": data.get("userFrames", 0),
         "totalFrames": data.get("totalFrames", 0), "capped": bool(data.get("capped")),
     }
+    overflow = _overflow_info(stderr, data.get("overflow"))
     if not data.get("stopped"):
-        base["kind"] = "no_crash"
         base["exitCode"] = data.get("exitCode")
+        if overflow:
+            base.update(kind="overflow", detail=overflow, line=overflow["line"], func=overflow.get("func"),
+                        lineText=overflow.get("lineText") or "", locals=overflow.get("locals") or [])
+        else:
+            base["kind"] = "no_crash"
         return base
+    base["overflow"] = overflow
 
     analysis = data.get("analysis") or {}
     sig = data.get("signal")
