@@ -185,6 +185,20 @@
             </div>
             <div id="stress-result" class="stress-result"><p class="muted-text">Bấm “Tìm lỗi” để bắt đầu.</p></div>
           </section>
+          <section class="panel" id="diverge-panel" aria-label="Soi chỗ lệch">
+            <div class="panel-heading">
+              <div class="panel-title"><strong>Soi chỗ lệch</strong><span id="diverge-badge" class="result-badge neutral">Chưa chạy</span></div>
+            </div>
+            <div class="stress-intro">
+              Chạy từng dòng cả 2 code với MỘT input nhỏ, rồi chỉ ra biến nào <b>bắt đầu có giá trị khác nhau</b> sớm nhất và ở dòng nào.
+              Chỉ so được các biến <b>trùng tên</b> ở 2 code. Dùng input ngắn (vài trăm bước).
+            </div>
+            <div class="stress-result">
+              <textarea id="diverge-input" class="diverge-input" rows="4" spellcheck="false" placeholder="Dán input nhỏ vào đây (hoặc bấm “Soi chỗ lệch” ở test lỗi phía trên)"></textarea>
+              <button type="button" id="diverge-run" class="share-button">Tìm dòng lệch</button>
+              <div id="diverge-result"></div>
+            </div>
+          </section>
         </div>
 
         <div class="side-stack debug-only">

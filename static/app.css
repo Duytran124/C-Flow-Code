@@ -231,3 +231,11 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .stress-verdict.bad { color: #fda4af; }
 @media (max-width: 720px) { .stress-cols { grid-template-columns: 1fr; } }
 .stress-stop-row { text-align: center; margin-top: 6px; }
+
+.diverge-input { width: 100%; box-sizing: border-box; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-deep); color: #f0eff8; font: 12.5px/1.6 var(--mono); resize: vertical; }
+.diverge-item { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.diverge-item h4 { margin: 0; font-size: 13px; }
+.diverge-side { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.diverge-line { font: 12px/1.5 var(--mono); color: #b4b1c8; white-space: pre-wrap; word-break: break-all; }
+.diverge-line b { color: #fff; }
+@media (max-width: 720px) { .diverge-side { grid-template-columns: 1fr; } }

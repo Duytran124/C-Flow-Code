@@ -1146,7 +1146,14 @@ function renderStressResult(data) {
     const debug = stressEl("button", "share-button", "Debug với input này");
     debug.type = "button";
     debug.addEventListener("click", () => useInputFromStress(data.input || "", "debug"));
-    if (!tooBig && !clipped) actions.append(run, debug, copy);
+    const soi = stressEl("button", "share-button", "Soi chỗ lệch");
+    soi.type = "button";
+    soi.addEventListener("click", () => {
+      $("diverge-input").value = data.input || "";
+      $("diverge-panel").scrollIntoView({behavior: "smooth", block: "nearest"});
+      runDiverge();
+    });
+    if (!tooBig && !clipped) actions.append(run, debug, copy, soi);
     box.appendChild(actions);
     return;
   }
@@ -1241,3 +1248,101 @@ $("stress-stop").addEventListener("click", () => {
   stressState.cancel = true;
   $("stress-stop").hidden = true;
 });
+
+
+// ---- Soi chỗ lệch giữa 2 code ----
+function sourceLine(text, line) {
+  if (!line) return "";
+  return (text.split("\n")[line - 1] || "").trim();
+}
+
+function renderDiverge(data) {
+  const box = $("diverge-result");
+  box.textContent = "";
+  const buf = stressState.buffers;
+  if (data.status !== "ok") {
+    setDivergeBadge("Có lỗi", "error");
+    const who = STRESS_WHICH[data.which] || "";
+    const head = data.kind === "compile" ? `Lỗi biên dịch${who ? ` (${who})` : ""}` : "Không soi được";
+    box.appendChild(stressEl("p", "stress-verdict bad", head));
+    if (data.message) box.appendChild(stressEl("pre", "stress-pre bad", data.message));
+    return;
+  }
+  const list = data.divergences || [];
+  const notes = [];
+  for (const k of ["mine", "brute"]) {
+    if (data.truncated[k]) notes.push(`${STRESS_WHICH[k]} chạy quá dài nên chỉ theo dõi phần đầu.`);
+    if (data.signal[k]) notes.push(`${STRESS_WHICH[k]} bị dừng bởi tín hiệu ${data.signal[k]}${data.signalLine[k] ? ` ở dòng ${data.signalLine[k]}` : ""}.`);
+  }
+  if (!list.length) {
+    setDivergeBadge("Không thấy lệch", "neutral");
+    box.appendChild(stressEl("p", "stress-verdict", data.commonVars
+      ? "Các biến trùng tên đều có lịch sử giá trị giống nhau."
+      : "Hai code không có biến nào trùng tên để so sánh."));
+    if (!data.output.same) box.appendChild(stressEl("p", "muted-text", "Nhưng output khác nhau, nên chỗ lệch nằm ở biến/công thức khác tên. Thử đặt tên biến giống nhau ở 2 code."));
+  } else {
+    setDivergeBadge("Tìm thấy chỗ lệch", "error");
+    box.appendChild(stressEl("p", "stress-verdict bad", "Biến lệch sớm nhất (xếp theo thời điểm xảy ra):"));
+    list.forEach((d, i) => {
+      const item = stressEl("div", "diverge-item");
+      item.appendChild(stressEl("h4", "", `${i + 1}. Biến “${d.name}”${d.func === "main" || d.func === "(toàn cục)" ? "" : ` trong ${d.func}()`}${d.func === "(toàn cục)" ? " (toàn cục)" : ""}`));
+      const sides = stressEl("div", "diverge-side");
+      for (const [k, cls] of [["mine", "bad"], ["brute", "good"]]) {
+        const s = d[k];
+        const col = document.createElement("div");
+        col.appendChild(stressEl("div", "stress-block-label", STRESS_WHICH[k]));
+        const val = s.value === null ? "(không có giá trị mới — chạy xong rồi)" : s.value;
+        col.appendChild(stressEl("pre", `stress-pre ${cls}`, val));
+        if (s.line) col.appendChild(stressEl("div", "diverge-line", `Dòng ${s.line}: ${sourceLine(buf[k], s.line)}`));
+        sides.appendChild(col);
+      }
+      item.appendChild(sides);
+      if (d.before !== null) item.appendChild(stressEl("div", "diverge-line", `Trước đó 2 bên đều bằng: ${d.before}`));
+      box.appendChild(item);
+    });
+    if (data.totalDivergent > list.length) box.appendChild(stressEl("p", "muted-text", `Còn ${data.totalDivergent - list.length} biến lệch khác (thường là hệ quả của biến đầu tiên).`));
+    box.appendChild(stressEl("p", "muted-text", "Gợi ý: dòng đầu tiên làm biến khác đi thường là nơi chứa lỗi. Bạn có thể bấm “Debug với input này” để đi từng bước."));
+  }
+  if (!data.output.same && data.output.line) {
+    box.appendChild(stressEl("p", "muted-text", `Output bắt đầu khác ở dòng ${data.output.line}: bạn in “${data.output.mine ?? ""}”, code đúng in “${data.output.brute ?? ""}”.`));
+  }
+  notes.forEach((n) => box.appendChild(stressEl("p", "muted-text", n)));
+}
+
+function setDivergeBadge(text, cls) {
+  $("diverge-badge").textContent = text;
+  $("diverge-badge").className = `result-badge ${cls}`;
+}
+
+let divergeRunning = false;
+async function runDiverge() {
+  if (divergeRunning) return;
+  stressState.buffers[stressState.tab] = $("code").value;
+  const {mine, brute} = stressState.buffers;
+  if (!mine.trim() || !brute.trim() || brute.trim() === BRUTE_HINT.trim()) {
+    showToast("Cần có đủ “Code của bạn” và “Code đúng” trước.", true);
+    return;
+  }
+  divergeRunning = true;
+  $("diverge-run").disabled = true;
+  setDivergeBadge("Đang chạy", "neutral");
+  $("diverge-result").textContent = "";
+  $("diverge-result").appendChild(stressEl("p", "muted-text", "Đang chạy từng dòng cả 2 code, có thể mất 10–40 giây…"));
+  try {
+    const response = await fetch("/api/diverge", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mine, brute, input: $("diverge-input").value}),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderDiverge(await response.json());
+  } catch (error) {
+    setDivergeBadge("Lỗi kết nối", "error");
+    $("diverge-result").textContent = "";
+    $("diverge-result").appendChild(stressEl("p", "stress-verdict bad", `Không gọi được API: ${error.message}`));
+  } finally {
+    divergeRunning = false;
+    $("diverge-run").disabled = false;
+  }
+}
+$("diverge-run").addEventListener("click", runDiverge);
