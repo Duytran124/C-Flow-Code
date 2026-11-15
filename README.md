@@ -151,3 +151,8 @@ Nút **Chia sẻ** nén code + input rồi đặt vào phần sau dấu `#` củ
 
 Chế độ **Tìm lỗi** nhận 3 chương trình: code của bạn, code đúng (vét cạn) và generator (đọc seed từ `argv[1]`, in ra một test). Web chạy seed 1, 2, 3, … và dừng ở test đầu tiên mà code của bạn sai / lỗi / quá giờ, kèm nút "Debug với input này".
 API: `POST /api/stress` `{mine, brute, gen, tests}`. Giới hạn: tối đa 1000 test, chạy đủ số test: web chia thành nhiều đợt, mỗi đợt tối đa ~15 giây (`CPPFLOW_STRESS_BUDGET`), mỗi chương trình tối đa 2 giây. Ở chế độ Docker, cả đợt chạy trong một container; qua runner từ xa, web Render tự chuyển lời gọi sang máy của bạn.
+
+## Soi chỗ lệch v15
+Trong chế độ "Tìm lỗi", panel **Soi chỗ lệch** chạy từng dòng cả 2 code (GDB, `app/diverge.py`, `POST /api/diverge`) với một input nhỏ,
+ghi lịch sử giá trị mọi biến rồi báo biến trùng tên nào bắt đầu khác nhau sớm nhất và ở dòng nào.
+Giới hạn: ~6000 bước, 12 giây theo dõi mỗi code, input ≤ 20.000 ký tự.
