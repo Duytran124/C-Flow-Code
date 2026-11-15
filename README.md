@@ -156,3 +156,10 @@ API: `POST /api/stress` `{mine, brute, gen, tests}`. Giới hạn: tối đa 100
 Trong chế độ "Tìm lỗi", panel **Soi chỗ lệch** chạy từng dòng cả 2 code (GDB, `app/diverge.py`, `POST /api/diverge`) với một input nhỏ,
 ghi lịch sử giá trị mọi biến rồi báo biến trùng tên nào bắt đầu khác nhau sớm nhất và ở dòng nào.
 Giới hạn: ~6000 bước, 12 giây theo dõi mỗi code, input ≤ 20.000 ký tự.
+
+## Giải thích crash v16
+Ở chế độ Chạy, sau khi chạy xong có nút **Giải thích vì sao lỗi** (hoặc **Kiểm tra lỗi ngầm** nếu chạy thành công).
+`app/crash.py` + `POST /api/crash` biên dịch lại với `-D_GLIBCXX_ASSERTIONS -fsanitize=bounds,null,integer-divide-by-zero,return`,
+chạy dưới GDB, tìm dòng gây lỗi của code người dùng rồi phân loại: vượt biên mảng/vector/string, con trỏ null, chia 0, tràn stack,
+cấp phát quá lớn, thiếu return, ngoại lệ không bắt, lỗi heap. Giao diện vẽ hình SVG minh họa.
+Có thêm bộ PCH `/opt/pch-crash` (biến môi trường `CPPFLOW_PCH_CRASH_DIR`) để biên dịch nhanh.
