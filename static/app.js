@@ -434,6 +434,10 @@ let debugFinished = false;
 let debugSpeed = 500;
 let debugSourceCode = "";
 
+// Bản ghi các bước debug để tua lại / phát lại / chia sẻ.
+const REPLAY_MAX_FRAMES = 1500;
+const replay = {frames: [], idx: -1, timer: null, viewOnly: false, code: "", input: "", recording: false, origin: ""};
+
 function setDebugStatus(message, badge = null, badgeClass = null) {
   const statusElement = document.getElementById("debug-status");
   const badgeElement = document.getElementById("debug-badge");
@@ -485,6 +489,7 @@ async function endDebugSession(message = "Đã dừng phiên debug.") {
   $("debug-into").disabled = true;
   $("debug-stop").disabled = true;
   $("debug-speed").disabled = true;
+  if (typeof replayRefresh === "function") replayRefresh();
 }
 
 function renderDebugSource(currentLine) {
@@ -682,12 +687,7 @@ function renderDebugArrays(rows) {
   container.replaceChildren(fragment);
 }
 
-function renderDebugState(data) {
-  if (!data || typeof data !== "object") {
-    setDebugStatus("Backend không trả về trạng thái debug hợp lệ.", "Lỗi debug", "error");
-    return;
-  }
-  debugFinished = Boolean(data.finished);
+function drawFrame(data) {
   setDebugLive(true);
   renderDebugSource(data.line);
   $("debug-line-label").textContent = data.line ? `Dòng: ${data.line}` : "Dòng: —";
@@ -700,6 +700,16 @@ function renderDebugState(data) {
     [{key: "function"}, {key: "line"}]
   );
   $("debug-output").textContent = data.stdout || "(chưa có output)";
+}
+
+function renderDebugState(data) {
+  if (!data || typeof data !== "object") {
+    setDebugStatus("Backend không trả về trạng thái debug hợp lệ.", "Lỗi debug", "error");
+    return;
+  }
+  debugFinished = Boolean(data.finished);
+  drawFrame(data);
+  recordFrame(data);
   if (data.finished) {
     stopDebugTimer();
     setDebugStatus(data.error || "Chương trình đã kết thúc.", "Hoàn tất", data.error ? "error" : "success");
@@ -761,6 +771,11 @@ function stopDebugTimer() {
 
 async function performDebugStep(into = true) {
   if (!debugSessionId || debugBusy) return null;
+  // Đang xem lại một bước cũ: "tiến" nghĩa là đi tiếp trong bản ghi cho tới khi bắt kịp bước hiện tại.
+  if (replay.idx >= 0 && replay.idx < replay.frames.length - 1) {
+    replayGo(replay.idx + 1);
+    return replay.frames[replay.idx];
+  }
   debugBusy = true;
   $("debug-step").disabled = true;
   $("debug-into").disabled = true;
@@ -811,6 +826,7 @@ $("debug-start").addEventListener("click", async () => {
     return;
   }
   debugSourceCode = code;
+  replayReset(code, $("stdin").value);
   $("debug-start").disabled = true;
   setDebugStatus("Đang tạo debugger và biên dịch bằng GDB…", "Đang chuẩn bị", "neutral");
   $("debug-variables").textContent = "Đang chờ dữ liệu biến…";
@@ -955,6 +971,7 @@ async function loadSharedCode() {
   try {
     const payload = await decodeShare(hash);
     if (typeof payload.c !== "string") throw new Error("thiếu code");
+    if (Array.isArray(payload.f)) { enterReplayView(payload); return; }
     $("code").value = payload.c;
     $("stdin").value = typeof payload.i === "string" ? payload.i : "";
     updateCodeHighlight();
@@ -1698,3 +1715,255 @@ $("explain-crash").addEventListener("click", async () => {
     button.textContent = "Phân tích lại";
   }
 });
+
+
+// ---------------------------------------------------------------
+// Phát lại như video: ghi từng bước debug, tua tới/lui, phát tự động,
+// chia sẻ bằng link hoặc tải về 1 file .html mở được ở mọi nơi (không cần máy chủ).
+// ---------------------------------------------------------------
+function frameCopy(data) {
+  return {
+    line: data.line || 0, function: data.function || "",
+    variables: data.variables || [], stack: (data.stack || []).map((x) => ({function: x.function, line: x.line})),
+    stdout: data.stdout || "", finished: Boolean(data.finished), error: data.error || "",
+  };
+}
+
+function replayReset(code, input) {
+  replayStop();
+  replay.frames = [];
+  replay.idx = -1;
+  replay.viewOnly = false;
+  replay.code = code;
+  replay.input = input;
+  replayRefresh();
+}
+
+function recordFrame(data) {
+  if (replay.viewOnly) return;
+  if (replay.frames.length >= REPLAY_MAX_FRAMES) return;
+  replay.frames.push(frameCopy(data));
+  replay.idx = replay.frames.length - 1;
+  replayRefresh();
+}
+
+function replayRefresh() {
+  const n = replay.frames.length;
+  $("replay-bar").hidden = n === 0;
+  $("rp-slider").max = String(Math.max(0, n - 1));
+  $("rp-slider").value = String(Math.max(0, replay.idx));
+  $("rp-label").textContent = n ? `Bước ${replay.idx + 1}/${n}` : "";
+  $("rp-prev").disabled = replay.idx <= 0;
+  $("rp-first").disabled = replay.idx <= 0;
+  $("rp-next").disabled = replay.idx >= n - 1;
+  $("rp-play").textContent = replay.timer !== null ? "Ⅱ Dừng" : "▶ Phát";
+  $("rp-share").disabled = n < 2 || replay.recording;
+  $("rp-download").disabled = n < 2 || replay.recording;
+  $("rp-record").hidden = replay.viewOnly;
+  $("rp-record").disabled = !replay.recording && (!debugSessionId || debugFinished);
+  $("rp-record").textContent = replay.recording ? "■ Dừng ghi" : "⏩ Ghi cả chương trình";
+}
+
+function replayGo(index) {
+  const n = replay.frames.length;
+  if (!n) return;
+  replay.idx = Math.max(0, Math.min(n - 1, index));
+  const frame = replay.frames[replay.idx];
+  drawFrame(frame);
+  const fn = frame.function ? ` trong ${frame.function}()` : "";
+  const live = debugSessionId && replay.idx === n - 1 && !replay.viewOnly;
+  setDebugStatus(frame.error || `Bước ${replay.idx + 1}/${n}${fn}${frame.line ? ` · dòng ${frame.line}` : ""}${frame.finished ? " · chương trình kết thúc" : ""}`,
+    replay.viewOnly ? "Phát lại" : (live ? "Đang debug" : "Đang xem lại"), frame.error ? "error" : "success");
+  replayRefresh();
+}
+
+function replayStop() {
+  if (replay.timer !== null) clearTimeout(replay.timer);
+  replay.timer = null;
+}
+
+function replayPlay() {
+  if (replay.timer !== null) { replayStop(); replayRefresh(); return; }
+  stopDebugTimer();
+  if (replay.idx >= replay.frames.length - 1) replayGo(0);
+  const tick = () => {
+    if (replay.idx >= replay.frames.length - 1) { replayStop(); replayRefresh(); return; }
+    replayGo(replay.idx + 1);
+    if (replay.idx >= replay.frames.length - 1) { replayStop(); replayRefresh(); return; }
+    replay.timer = setTimeout(tick, Number($("rp-speed").value));
+  };
+  replay.timer = setTimeout(tick, 150);
+  replayRefresh();
+}
+
+$("rp-play").addEventListener("click", replayPlay);
+$("rp-first").addEventListener("click", () => { replayStop(); replayGo(0); });
+$("rp-prev").addEventListener("click", () => { replayStop(); stopDebugTimer(); replayGo(replay.idx - 1); });
+$("rp-next").addEventListener("click", () => { replayStop(); stopDebugTimer(); replayGo(replay.idx + 1); });
+$("rp-slider").addEventListener("input", () => { replayStop(); stopDebugTimer(); replayGo(Number($("rp-slider").value)); });
+$("rp-speed").addEventListener("change", () => {
+  if (replay.timer !== null) { replayStop(); replayPlay(); }
+});
+
+// Chạy nhanh toàn bộ chương trình để ghi lại (dừng khi kết thúc, khi bấm Dừng ghi hoặc đủ số bước tối đa).
+$("rp-record").addEventListener("click", async () => {
+  if (replay.recording) { replay.recording = false; return; }
+  if (!debugSessionId || debugFinished || debugBusy) return;
+  stopDebugTimer();
+  replayStop();
+  replay.recording = true;
+  if (replay.frames.length) replayGo(replay.frames.length - 1);
+  replayRefresh();
+  try {
+    while (replay.recording && debugSessionId && !debugFinished && replay.frames.length < REPLAY_MAX_FRAMES) {
+      const data = await performDebugStep(true);
+      if (!data) break;
+      $("rp-label").textContent = `Đang ghi… ${replay.frames.length} bước`;
+    }
+  } finally {
+    const reachedCap = replay.frames.length >= REPLAY_MAX_FRAMES && !debugFinished;
+    replay.recording = false;
+    replayRefresh();
+    showToast(reachedCap
+      ? `Đã ghi tối đa ${REPLAY_MAX_FRAMES} bước đầu tiên. Bấm ▶ Phát để xem lại.`
+      : `Đã ghi ${replay.frames.length} bước. Bấm ▶ Phát để xem lại, hoặc chia sẻ.`);
+    replayGo(0);
+  }
+});
+
+// ---- Đóng gói để chia sẻ (bỏ các trường mặc định, chỉ lưu phần thay đổi) ----
+function slimVars(vars) {
+  return (vars || []).map((v) => {
+    const o = {n: v.name, v: v.value, t: v.type};
+    if (v.uninitialized) o.u = 1;
+    if (v.arrayLike) o.a = 1;
+    if (v.expandable) o.e = 1;
+    if (v.numChildren) o.k = v.numChildren;
+    if (v.children && v.children.length) o.c = v.children;
+    return o;
+  });
+}
+
+function fatVars(vars) {
+  return vars.map((o) => ({
+    name: o.n, value: o.v, type: o.t, uninitialized: Boolean(o.u), arrayLike: Boolean(o.a),
+    expandable: Boolean(o.e), numChildren: o.k || 0, children: o.c || [],
+  }));
+}
+
+function packFrames(frames) {
+  let prevV = null, prevS = null, prevOut = "";
+  return frames.map((f) => {
+    const vJ = JSON.stringify(slimVars(f.variables));
+    const sJ = JSON.stringify(f.stack.map((x) => [x.function, x.line]));
+    const outAppend = f.stdout.startsWith(prevOut);
+    const row = [
+      f.line, f.function,
+      vJ === prevV ? 0 : JSON.parse(vJ),
+      sJ === prevS ? 0 : JSON.parse(sJ),
+      outAppend ? 1 : 0, outAppend ? f.stdout.slice(prevOut.length) : f.stdout,
+      f.finished ? 1 : 0, f.error,
+    ];
+    prevV = vJ; prevS = sJ; prevOut = f.stdout;
+    return row;
+  });
+}
+
+function unpackFrames(rows) {
+  let vars = [], stack = [], out = "";
+  return rows.map((r) => {
+    if (r[2] !== 0) vars = fatVars(r[2]);
+    if (r[3] !== 0) stack = r[3].map((x) => ({function: x[0], line: x[1]}));
+    out = r[4] ? out + r[5] : r[5];
+    return {line: r[0], function: r[1], variables: vars, stack, stdout: out, finished: Boolean(r[6]), error: r[7] || ""};
+  });
+}
+
+function replayPayload() {
+  const origin = /^https?:/.test(location.protocol) ? location.origin + location.pathname : (replay.origin || "");
+  return {c: replay.code, i: replay.input, o: origin, f: packFrames(replay.frames)};
+}
+
+$("rp-share").addEventListener("click", async () => {
+  try {
+    const encoded = await encodeShare(replayPayload());
+    const url = `${location.origin}${location.pathname}#${encoded}`;
+    if (url.length > 60000) {
+      showToast("Bản ghi quá dài để chia sẻ bằng link. Hãy bấm “Tải file .html” rồi gửi file.", true);
+      return;
+    }
+    history.replaceState(null, "", `#${encoded}`);
+    const ok = await copyText(url);
+    showToast(ok
+      ? (url.length > 8000 ? "Đã chép link (khá dài, nếu app chat cắt link thì dùng “Tải file .html”)." : "Đã sao chép link phát lại!")
+      : "Không tự sao chép được. Hãy copy link trên thanh địa chỉ.", !ok);
+  } catch (error) {
+    showToast("Không tạo được link phát lại.", true);
+  }
+});
+
+async function buildReplayHtml() {
+  const [html, css, js] = await Promise.all(["./", "./static/app.css", "./static/app.js"].map(async (u) => {
+    const response = await fetch(u);
+    if (!response.ok) throw new Error(u);
+    return response.text();
+  }));
+  const data = JSON.stringify(replayPayload()).replace(/</g, "\\u003c");
+  const script = `<script>window.__REPLAY__=${data};<\/script>\n<script>${js.replace(/<\/script/gi, "<\\/script")}<\/script>`;
+  return html
+    .replace(/<link rel="stylesheet" href="\/static\/app\.css"\s*\/?>/, () => `<style>${css}</style>`)
+    .replace(/<script src="\/static\/app\.js"><\/script>/, () => script)
+    .replace(/<title>[^<]*<\/title>/, "<title>C++ Flow – Phát lại</title>");
+}
+
+$("rp-download").addEventListener("click", async () => {
+  try {
+    const text = await buildReplayHtml();
+    const blob = new Blob([text], {type: "text/html;charset=utf-8"});
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "cpp-flow-replay.html";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 4000);
+    showToast("Đã tải file phát lại. Gửi file này cho bạn bè, mở bằng trình duyệt là xem được.");
+  } catch (error) {
+    showToast("Không tạo được file phát lại (cần mở web qua máy chủ).", true);
+  }
+});
+
+// ---- Chế độ chỉ xem (mở từ link hoặc từ file .html được chia sẻ) ----
+function enterReplayView(payload) {
+  const frames = unpackFrames(payload.f);
+  if (!frames.length) { showToast("Bản phát lại trống.", true); return; }
+  document.body.classList.add("replay-view");
+  replay.viewOnly = true;
+  replay.frames = frames;
+  replay.code = String(payload.c || "");
+  replay.input = String(payload.i || "");
+  replay.origin = String(payload.o || "");
+  debugSourceCode = replay.code;
+  $("code").value = replay.code;
+  $("stdin").value = replay.input;
+  updateCodeHighlight();
+  updateLineCount();
+  setView("debug");
+  const open = $("rp-open");
+  if (replay.origin) { open.href = replay.origin; open.hidden = false; }
+  $("rp-download").hidden = !/^https?:/.test(location.protocol);
+  replayGo(0);
+  setTimeout(replayPlay, 700);
+}
+
+$("rp-open").addEventListener("click", (event) => {
+  // Nút "Tự thử với code này": nạp code + input vào web để người xem chạy/debug tiếp.
+  event.preventDefault();
+  (async () => {
+    const encoded = await encodeShare({c: replay.code, i: replay.input, v: "debug"});
+    const base = replay.origin || (location.origin + location.pathname);
+    window.open(`${base}#${encoded}`, "_blank", "noopener");
+  })();
+});
+
+if (window.__REPLAY__) enterReplayView(window.__REPLAY__);

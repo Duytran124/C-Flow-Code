@@ -254,3 +254,16 @@ button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2p
 .crash-stack summary { cursor: pointer; color: var(--text-2); font-weight: 700; }
 .crash-stack ol { margin: 8px 0 0; padding-left: 22px; font: 12px/1.7 var(--mono); color: #b4b1c8; }
 .crash-box .close-x { align-self: flex-end; }
+
+.replay-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); background: #12121c; }
+.replay-bar[hidden] { display: none; }
+.rp-slider { flex: 1 1 140px; min-width: 120px; accent-color: #a78bfa; }
+.rp-label { font: 700 12px Manrope, system-ui, sans-serif; color: var(--text-2); min-width: 86px; text-align: right; }
+.replay-bar a.share-button { text-decoration: none; display: inline-flex; align-items: center; }
+.replay-bar a[hidden] { display: none; }
+body.replay-view .debug-toolbar,
+body.replay-view .mode-switch,
+body.replay-view #share-code,
+body.replay-view #reset-code,
+body.replay-view .hide-in-stress,
+body.replay-view #backend-status { display: none !important; }

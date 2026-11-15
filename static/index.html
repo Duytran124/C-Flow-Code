@@ -88,6 +88,24 @@
           </label>
         </div>
 
+        <div id="replay-bar" class="replay-bar debug-only" hidden>
+          <button type="button" id="rp-first" class="debug-button" title="Về bước đầu" disabled>⏮</button>
+          <button type="button" id="rp-prev" class="debug-button" title="Lùi một bước" disabled>◀</button>
+          <button type="button" id="rp-play" class="debug-button primary">▶ Phát</button>
+          <button type="button" id="rp-next" class="debug-button" title="Tới một bước" disabled>▶</button>
+          <input type="range" id="rp-slider" class="rp-slider" min="0" max="0" value="0" aria-label="Tua bản ghi" />
+          <span id="rp-label" class="rp-label"></span>
+          <select id="rp-speed" class="small-select" aria-label="Tốc độ phát">
+            <option value="150">Nhanh</option>
+            <option value="500" selected>Vừa</option>
+            <option value="1200">Chậm</option>
+          </select>
+          <button type="button" id="rp-record" class="debug-button" title="Chạy nhanh hết chương trình để ghi lại">⏩ Ghi cả chương trình</button>
+          <button type="button" id="rp-share" class="share-button" title="Sao chép link phát lại" disabled>Chia sẻ link</button>
+          <button type="button" id="rp-download" class="share-button" title="Tải file .html xem được ở mọi nơi" disabled>Tải file .html</button>
+          <a id="rp-open" class="share-button" href="#" hidden>Tự thử với code này</a>
+        </div>
+
         <label class="sr-only" for="code">Mã nguồn C++</label>
         <div class="code-editor">
           <pre id="line-numbers" aria-hidden="true"></pre>
