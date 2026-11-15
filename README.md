@@ -163,3 +163,5 @@ Giới hạn: ~6000 bước, 12 giây theo dõi mỗi code, input ≤ 20.000 ký
 chạy dưới GDB, tìm dòng gây lỗi của code người dùng rồi phân loại: vượt biên mảng/vector/string, con trỏ null, chia 0, tràn stack,
 cấp phát quá lớn, thiếu return, ngoại lệ không bắt, lỗi heap. Giao diện vẽ hình SVG minh họa.
 Có thêm bộ PCH `/opt/pch-crash` (biến môi trường `CPPFLOW_PCH_CRASH_DIR`) để biên dịch nhanh.
+(v17) "Kiểm tra lỗi ngầm" giờ cũng báo **tràn số nguyên có dấu** (`-fsanitize=signed-integer-overflow`, chỉ báo cáo rồi chạy tiếp):
+GDB dừng ở lần tràn đầu tiên để lấy dòng và giá trị biến, rồi chạy tiếp.
