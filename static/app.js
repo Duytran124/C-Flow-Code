@@ -1512,6 +1512,40 @@ function figChain(d) {
   return out + "</svg>";
 }
 
+function overflowFacts(dt) {
+  const bits = BigInt(dt.bits || 32);
+  const max = (2n ** (bits - 1n)) - 1n;
+  const min = -max - 1n;
+  const A = BigInt(dt.a);
+  const B = dt.b !== null && dt.b !== undefined ? BigInt(dt.b) : 0n;
+  const real = dt.op === "+" ? A + B : dt.op === "-" ? A - B : dt.op === "*" ? A * B : -A;
+  const wrapped = BigInt.asIntN(Number(bits), real);
+  const fmt = (x) => x.toLocaleString("vi-VN");
+  const expr = dt.op === "neg" ? `-(${fmt(A)})` : `${fmt(A)} ${dt.op === "*" ? "×" : dt.op} ${fmt(B)}`;
+  return {max, min, A, B, real, wrapped, fmt, expr};
+}
+
+function figOverflow(dt) {
+  const f = overflowFacts(dt);
+  let out = SVG_HEAD(200);
+  out += `<text x="320" y="34" fill="${C.text}" font-size="16" font-weight="800" font-family="monospace" text-anchor="middle">${esc(f.expr)} = ${esc(f.fmt(f.real))}</text>`;
+  out += `<text x="320" y="54" fill="${C.mute}" font-size="11.5" text-anchor="middle">kết quả thật (toán học)</text>`;
+  // thanh biểu diễn phạm vi của kiểu số
+  out += `<rect x="60" y="82" width="420" height="30" rx="6" fill="${C.cell}" stroke="${C.line}"/>`;
+  const ratio = Number(f.A) / Number(f.max);
+  const fill = Math.max(0, Math.min(1, ratio));
+  if (fill > 0) out += `<rect x="60" y="82" width="${(420 * fill).toFixed(1)}" height="30" rx="6" fill="#134e4a"/>`;
+  out += `<rect x="480" y="82" width="110" height="30" rx="6" fill="${C.redBg}" stroke="${C.red}" stroke-dasharray="5 4"/>`;
+  out += `<text x="535" y="102" fill="${C.red}" font-size="12" font-weight="800" text-anchor="middle">vượt giới hạn</text>`;
+  out += `<line x1="480" y1="74" x2="480" y2="120" stroke="${C.text}" stroke-width="2"/>`;
+  out += `<text x="60" y="132" fill="${C.mute}" font-size="11" text-anchor="start">${esc(f.fmt(f.min))}</text>`;
+  out += `<text x="480" y="132" fill="${C.text}" font-size="11" font-weight="800" text-anchor="middle">${esc(f.fmt(f.max))}</text>`;
+  out += `<text x="270" y="102" fill="${C.ok}" font-size="12" text-anchor="middle">${esc(dt.type)} chứa được</text>`;
+  out += `<path d="M535 118 C 535 170, 170 170, 150 118" fill="none" stroke="${C.red}" stroke-width="2.5" marker-end="url(#arr)"/>`;
+  out += `<text x="320" y="180" fill="${C.red}" font-size="13" font-weight="800" text-anchor="middle">quay vòng thành ${esc(f.fmt(f.wrapped))}</text>`;
+  return out + "</svg>";
+}
+
 function crashText(d) {
   const line = d.line ? `dòng ${d.line}` : "một dòng trong code";
   const tips = [];
@@ -1528,6 +1562,17 @@ function crashText(d) {
       tips.push("In ra hoặc debug giá trị của biến chỉ số ngay trước dòng này để xem vì sao nó có giá trị đó.");
       if (dt.containerKind === "array") tips.push("Lưu ý: với mảng thường, lỗi này nhiều khi KHÔNG crash khi chạy bình thường mà chỉ làm kết quả sai (ghi đè ô nhớ khác). Lần này web bật chế độ kiểm tra nên bắt được.");
       return {title: `Truy cập ngoài phạm vi ${what}`, why, tips, fig: figOob(dt)};
+    }
+    case "overflow": {
+      const f = overflowFacts(dt);
+      const vars = (d.locals || []).map((v) => `<code>${esc(v[0])} = ${esc(v[1])}</code>`).join(", ");
+      const tips = [`Đổi biến chứa kết quả (tổng, tích, đếm...) sang <code>long long</code> (chứa tới khoảng 9,2 × 10<sup>18</sup>).`,
+        "Khi nhân hai số <code>int</code> rồi gán vào <code>long long</code>, phải ép kiểu TRƯỚC khi nhân: <code>1LL * a * b</code> (viết <code>(long long)(a * b)</code> là vẫn sai).",
+        `Kiểu <code>${esc(dt.type)}</code> chỉ chứa từ ${f.fmt(f.min)} đến ${f.fmt(f.max)}. Hãy ước lượng giá trị lớn nhất theo giới hạn của đề để chọn kiểu phù hợp.`];
+      return {title: "Tràn số nguyên (integer overflow)",
+        why: `Ở dòng ${dt.line}, phép <code>${esc(f.expr)}</code> có kết quả thật là <b>${esc(f.fmt(f.real))}</b>, nhưng kiểu <code>${esc(dt.type)}</code> chỉ chứa tối đa <b>${esc(f.fmt(f.max))}</b>. Kết quả bị “quay vòng” thành <b>${esc(f.fmt(f.wrapped))}</b>. Chương trình vẫn chạy tiếp nên không crash, chỉ cho ra đáp án sai.` +
+          (vars ? ` Lúc tràn lần đầu: ${vars}.` : "") + (dt.places > 1 ? ` Có ${dt.places} chỗ trong code bị tràn.` : ""),
+        tips, fig: figOverflow(dt)};
     }
     case "stack_overflow":
       return {title: "Tràn stack: hàm tự gọi lại quá sâu",
@@ -1593,7 +1638,7 @@ function renderCrash(data) {
   }
   if (data.kind === "no_crash") {
     add("h3", "", "Không phát hiện lỗi ngầm hay crash với input này");
-    add("p", "", `Đã chạy lại với chế độ kiểm tra (chỉ số mảng/vector, con trỏ null, chia 0, thiếu return), chương trình thoát bình thường${data.exitCode ? ` với mã <b>${esc(data.exitCode)}</b> (code tự trả về mã khác 0, ví dụ <code>return ${esc(data.exitCode)};</code> trong <code>main</code> hoặc <code>exit(${esc(data.exitCode)})</code>)` : ""}.`);
+    add("p", "", `Đã chạy lại với chế độ kiểm tra (chỉ số mảng/vector, con trỏ null, chia 0, thiếu return, tràn số int), chương trình thoát bình thường${data.exitCode ? ` với mã <b>${esc(data.exitCode)}</b> (code tự trả về mã khác 0, ví dụ <code>return ${esc(data.exitCode)};</code> trong <code>main</code> hoặc <code>exit(${esc(data.exitCode)})</code>)` : ""}.`);
     add("p", "", "Nếu trên máy khác vẫn bị lỗi, hãy kiểm tra input có giống hệt không (bao gồm cả khoảng trắng và dòng cuối).");
     return;
   }
@@ -1611,6 +1656,11 @@ function renderCrash(data) {
   if (data.lineText && data.line) add("div", "crash-src", `${esc(data.line)} │ ${esc(data.lineText)}`);
   const ul = add("div", "");
   ul.innerHTML = `<p><b>Cách xử lý gợi ý</b></p><ul class="crash-tips">${t.tips.map((x) => `<li>${x}</li>`).join("")}</ul>`;
+
+  if (data.overflow && data.kind !== "overflow") {
+    const o = overflowFacts(data.overflow);
+    add("p", "", `<b>Ngoài ra</b> trước khi lỗi, chương trình đã bị tràn số ở dòng ${esc(data.overflow.line)}: <code>${esc(o.expr)}</code> vượt giới hạn của <code>${esc(data.overflow.type)}</code>. Đây có thể là nguyên nhân gốc, hãy đổi sang <code>long long</code> rồi chạy lại.`);
+  }
 
   if ((data.stack && data.stack.length) || (data.locals && data.locals.length)) {
     const det = add("details", "crash-stack");
