@@ -14,6 +14,7 @@ from app import remote, sandbox
 from app.runner import run_cpp, DockerUnavailable, RunnerError
 from app.stress import run_stress
 from app.diverge import run_diverge
+from app.crash import run_crash
 from app.debugger import (
     DebuggerError,
     DockerUnavailable as DebugDockerUnavailable,
@@ -110,6 +111,11 @@ class StressRequest(BaseModel):
 class DivergeRequest(BaseModel):
     mine: str = Field(max_length=100_000)
     brute: str = Field(max_length=100_000)
+    input: str = Field(default="", max_length=20_000)
+
+
+class CrashRequest(BaseModel):
+    code: str = Field(max_length=100_000)
     input: str = Field(default="", max_length=20_000)
 
 
@@ -225,6 +231,26 @@ def diverge(request: DivergeRequest, http_request: Request):
             pass
     try:
         return run_diverge(request.mine, request.brute, request.input)
+    except DockerUnavailable as exc:
+        return {"status": "error", "kind": "environment", "message": str(exc)}
+    except RunnerError as exc:
+        return {"status": "error", "kind": "runner", "message": str(exc)}
+
+
+@app.post("/api/crash")
+def crash(request: CrashRequest, http_request: Request):
+    if _rate_limited(http_request):
+        return {"status": "error", "kind": "rate_limit", "message": RATE_LIMIT_MESSAGE}
+    if remote.enabled() and remote.available():
+        try:
+            status, data = remote.post("/api/crash", request.model_dump(), remote.RUN_TIMEOUT)
+            if status == 200 and isinstance(data, dict) and data.get("kind") != "environment":
+                data["via"] = "remote"
+                return data
+        except remote.RemoteUnavailable:
+            pass
+    try:
+        return run_crash(request.code, request.input)
     except DockerUnavailable as exc:
         return {"status": "error", "kind": "environment", "message": str(exc)}
     except RunnerError as exc:

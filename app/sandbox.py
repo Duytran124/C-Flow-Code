@@ -88,7 +88,7 @@ def pch_include_args(kind: str = "debug") -> list[str]:
     Chỉ có tác dụng khi `#include <bits/stdc++.h>` là dòng include đầu tiên của code;
     ngược lại, GCC tự dùng header gốc nên kết quả vẫn đúng, chỉ không nhanh hơn.
     """
-    name = "CPPFLOW_PCH_RUN_DIR" if kind == "run" else "CPPFLOW_PCH_DIR"
+    name = {"run": "CPPFLOW_PCH_RUN_DIR", "crash": "CPPFLOW_PCH_CRASH_DIR"}.get(kind, "CPPFLOW_PCH_DIR")
     directory = os.environ.get(name, "").strip()
     if directory and (Path(directory) / "bits" / "stdc++.h.gch").is_file():
         return [f"-I{directory}"]
