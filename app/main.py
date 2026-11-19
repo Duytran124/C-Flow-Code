@@ -1,12 +1,13 @@
 import hmac
 import os
+import re
 import threading
 import time
 from collections import defaultdict, deque
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -143,9 +144,35 @@ def _remote_session_call(session_id: str, action: str, payload: dict):
     raise HTTPException(status_code=status, detail=str(detail or "Lỗi từ máy chạy Docker."))
 
 
+def _public_base(request: Request) -> str:
+    configured = os.environ.get("CPPFLOW_PUBLIC_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host", request.headers.get("host", request.url.netloc))
+    base = f"{proto}://{host}"
+    return base if re.fullmatch(r"https?://[A-Za-z0-9.\-:]+", base) else ""
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots(request: Request):
+    body = f"User-agent: *\nAllow: /\nDisallow: /api/\nSitemap: {_public_base(request)}/sitemap.xml\n"
+    return Response(body, media_type="text/plain")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+def sitemap(request: Request):
+    body = ('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+            f'  <url><loc>{_public_base(request)}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>\n')
+    return Response(body, media_type="application/xml")
+
+
 @app.get("/")
-def index():
-    return FileResponse(STATIC / "index.html")
+def index(request: Request):
+    html = (STATIC / "index.html").read_text(encoding="utf-8").replace("__BASE_URL__", _public_base(request))
+    token = os.environ.get("GOOGLE_SITE_VERIFICATION", "").strip()
+    meta = f'<meta name="google-site-verification" content="{token}" />' if re.fullmatch(r"[\w-]{10,100}", token) else ""
+    return HTMLResponse(html.replace("__VERIFICATION__", meta))
 
 
 @app.get("/api/health")
