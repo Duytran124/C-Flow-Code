@@ -124,6 +124,14 @@ class ForumPostRequest(BaseModel):
     author: str = Field(default="", max_length=200)
 
 
+class ForumReportRequest(BaseModel):
+    reason: str = Field(default="other", max_length=30)
+
+
+class ForumResolveRequest(BaseModel):
+    action: str = Field(max_length=20)
+
+
 class ForumVoteRequest(BaseModel):
     value: int
 
@@ -332,10 +340,40 @@ def forum_comment(post_id: int, body: ForumCommentRequest, request: Request):
 
 
 @app.post("/api/forum/{kind}/{item_id}/report")
-def forum_report(kind: str, item_id: int, request: Request):
+def forum_report(kind: str, item_id: int, request: Request, body: ForumReportRequest | None = None):
     if kind not in ("post", "comment"):
         raise HTTPException(status_code=404)
-    return _forum_call(request, lambda owner, admin, who: forum.report(kind, item_id, owner, who))
+    reason = body.reason if body else "other"
+    return _forum_call(request, lambda owner, admin, who: forum.report(kind, item_id, owner, who, reason))
+
+
+def _forum_admin_only(request: Request, fn):
+    def work(owner, admin, who):
+        forum.admin_rate(who)
+        if not admin:
+            raise forum.ForumError("Mã quản trị không đúng hoặc chưa được cấu hình.", 403)
+        return fn()
+    return _forum_call(request, work)
+
+
+@app.get("/api/forum/admin/check")
+def forum_admin_check(request: Request):
+    return _forum_admin_only(request, lambda: {"status": "ok"})
+
+
+@app.get("/api/forum/admin/queue")
+def forum_admin_queue(request: Request):
+    return _forum_admin_only(request, forum.admin_queue)
+
+
+@app.post("/api/forum/admin/{kind}/{item_id}/resolve")
+def forum_admin_resolve(kind: str, item_id: int, body: ForumResolveRequest, request: Request):
+    if kind not in ("post", "comment"):
+        raise HTTPException(status_code=404)
+    def run():
+        forum.admin_resolve(kind, item_id, body.action)
+        return {"status": "ok"}
+    return _forum_admin_only(request, run)
 
 
 @app.delete("/api/forum/{kind}/{item_id}")

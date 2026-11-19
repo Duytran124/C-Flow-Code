@@ -84,6 +84,13 @@ def _db():
         conn.close()
 
 
+def _add_column(run, table: str, column: str, ddl: str) -> None:
+    if DATABASE_URL:
+        run(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
+    elif column not in [r["name"] for r in run(f"PRAGMA table_info({table})")]:
+        run(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def _ensure_schema() -> None:
     global _READY
     if _READY:
@@ -107,6 +114,10 @@ def _ensure_schema() -> None:
                 target TEXT NOT NULL, target_id BIGINT NOT NULL, reporter TEXT NOT NULL, created_at BIGINT NOT NULL,
                 PRIMARY KEY (target, target_id, reporter))""")
             run("CREATE INDEX IF NOT EXISTS idx_comments_post ON comments (post_id)")
+            # v21: trạng thái kiểm duyệt (0 = bình thường, 1 = chờ quản trị viên duyệt, 2 = đã giữ lại, 3 = quản trị viên đã xóa)
+            _add_column(run, "posts", "review", "INTEGER NOT NULL DEFAULT 0")
+            _add_column(run, "comments", "review", "INTEGER NOT NULL DEFAULT 0")
+            _add_column(run, "reports", "reason", "TEXT NOT NULL DEFAULT ''")
         _READY = True
 
 
@@ -148,7 +159,8 @@ def is_admin(token: str) -> bool:
 
 _RATE: dict[tuple[str, str], deque] = defaultdict(deque)
 _RATE_LOCK = threading.Lock()
-_LIMITS = {"post": (5, 3600), "comment": (20, 600), "vote": (60, 60), "report": (20, 600)}
+_LIMITS = {"post": (5, 3600), "comment": (20, 600), "vote": (60, 60), "report": (20, 600), "admin": (10, 600)}
+REASONS = {"spam": "Spam", "scam": "Link/lừa đảo", "malware": "Code độc hại", "inappropriate": "Không phù hợp", "other": "Khác"}
 
 
 def _rate_check(action: str, who: str) -> None:
@@ -296,17 +308,73 @@ def delete_item(kind: str, item_id: int, owner: str, admin: bool) -> None:
         run(f"UPDATE {table} SET hidden = 1 WHERE id = ?", (item_id,))
 
 
-def report(kind: str, item_id: int, owner: str, who: str) -> dict:
+def report(kind: str, item_id: int, owner: str, who: str, reason: str = "other") -> dict:
     _rate_check("report", who)
+    if reason not in REASONS:
+        reason = "other"
     table = {"post": "posts", "comment": "comments"}[kind]
     _ensure_schema()
     with _db() as run:
-        if not run(f"SELECT 1 AS x FROM {table} WHERE id = ? AND hidden = 0", (item_id,)):
+        rows = run(f"SELECT review FROM {table} WHERE id = ? AND hidden = 0", (item_id,))
+        if not rows:
             raise ForumError("Không tìm thấy.", 404)
-        run("INSERT INTO reports (target, target_id, reporter, created_at) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT (target, target_id, reporter) DO NOTHING", (kind, item_id, owner, int(time.time())))
+        if int(rows[0]["review"]) == 2:       # quản trị viên đã xem và giữ lại: không tự ẩn nữa
+            return {"reports": 0, "hidden": False}
+        run("INSERT INTO reports (target, target_id, reporter, created_at, reason) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (target, target_id, reporter) DO NOTHING", (kind, item_id, owner, int(time.time()), reason))
         count = int(run("SELECT COUNT(*) AS n FROM reports WHERE target = ? AND target_id = ?", (kind, item_id))[0]["n"])
         hidden = count >= REPORT_HIDE_AT
-        if hidden:
-            run(f"UPDATE {table} SET hidden = 1 WHERE id = ?", (item_id,))
+        if hidden:   # ẩn tạm thời, chờ quản trị viên duyệt
+            run(f"UPDATE {table} SET hidden = 1, review = 1 WHERE id = ?", (item_id,))
     return {"reports": count, "hidden": hidden}
+
+
+# --------------------------------------------------------------------------------------
+# Quản trị viên
+# --------------------------------------------------------------------------------------
+def admin_queue() -> dict:
+    """Các bài/bình luận đang chờ duyệt (đã bị ẩn tạm) và đang bị báo cáo nhưng chưa bị ẩn."""
+    _ensure_schema()
+    items = []
+    with _db() as run:
+        posts = run("""SELECT * FROM (
+              SELECT p.id, p.title, p.description, p.code, p.author, p.created_at, p.hidden, p.review,
+                (SELECT COUNT(*) FROM reports r WHERE r.target = 'post' AND r.target_id = p.id) AS n FROM posts p) t
+            WHERE t.review = 1 OR (t.review = 0 AND t.hidden = 0 AND t.n > 0)""")
+        comments = run("""SELECT * FROM (
+              SELECT c.id, c.post_id, c.line, c.body, c.author, c.created_at, c.hidden, c.review,
+                (SELECT COUNT(*) FROM reports r WHERE r.target = 'comment' AND r.target_id = c.id) AS n FROM comments c) t
+            WHERE t.review = 1 OR (t.review = 0 AND t.hidden = 0 AND t.n > 0)""")
+        reasons: dict[tuple[str, int], dict[str, int]] = {}
+        for r in run("SELECT target, target_id, reason, COUNT(*) AS n FROM reports GROUP BY target, target_id, reason"):
+            reasons.setdefault((r["target"], int(r["target_id"])), {})[r["reason"] or "other"] = int(r["n"])
+    for r in posts:
+        items.append({"kind": "post", "id": int(r["id"]), "title": r["title"], "text": r["description"],
+                      "code": "\n".join(r["code"].split("\n")[:40]), "author": r["author"],
+                      "createdAt": int(r["created_at"]), "pending": int(r["review"]) == 1,
+                      "reports": int(r["n"]), "reasons": reasons.get(("post", int(r["id"])), {})})
+    for r in comments:
+        items.append({"kind": "comment", "id": int(r["id"]), "postId": int(r["post_id"]), "line": r["line"],
+                      "title": "", "text": r["body"], "code": "", "author": r["author"],
+                      "createdAt": int(r["created_at"]), "pending": int(r["review"]) == 1,
+                      "reports": int(r["n"]), "reasons": reasons.get(("comment", int(r["id"])), {})})
+    items.sort(key=lambda x: (not x["pending"], -x["reports"], -x["createdAt"]))
+    return {"items": items, "pending": sum(1 for x in items if x["pending"])}
+
+
+def admin_resolve(kind: str, item_id: int, action: str) -> None:
+    table = {"post": "posts", "comment": "comments"}[kind]
+    if action not in ("keep", "delete"):
+        raise ForumError("Thao tác không hợp lệ.")
+    _ensure_schema()
+    with _db() as run:
+        if not run(f"SELECT 1 AS x FROM {table} WHERE id = ?", (item_id,)):
+            raise ForumError("Không tìm thấy.", 404)
+        if action == "keep":
+            run(f"UPDATE {table} SET hidden = 0, review = 2 WHERE id = ?", (item_id,))
+        else:
+            run(f"UPDATE {table} SET hidden = 1, review = 3 WHERE id = ?", (item_id,))
+
+
+def admin_rate(who: str) -> None:
+    _rate_check("admin", who)
