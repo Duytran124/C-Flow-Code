@@ -278,10 +278,15 @@ $("reset-code").addEventListener("click", () => {
 // Chuyển giữa chế độ "Chạy" và "Debug": mỗi lúc chỉ hiện một chế độ.
 function setView(view) {
   const previousView = $("workspace").dataset.view;
-  if (previousView !== "stress" && view === "stress") enterStress();
+  if (view === "forum") { forumEnter(); }
+  else if (previousView !== "stress" && view === "stress") enterStress();
   else if (previousView === "stress" && view !== "stress") leaveStress();
-  $("workspace").dataset.view = view;
-  document.querySelectorAll(".hide-in-stress").forEach((element) => { element.hidden = view === "stress"; });
+  const isForum = view === "forum";
+  if (!isForum) $("workspace").dataset.view = view;
+  $("workspace").hidden = isForum;
+  $("forum").hidden = !isForum;
+  $("share-code").hidden = isForum;
+  document.querySelectorAll(".hide-in-stress").forEach((element) => { element.hidden = view === "stress" || isForum; });
   document.querySelectorAll(".mode-btn").forEach((button) => {
     const active = button.dataset.view === view;
     button.classList.toggle("active", active);
@@ -1967,3 +1972,385 @@ $("rp-open").addEventListener("click", (event) => {
 });
 
 if (window.__REPLAY__) enterReplayView(window.__REPLAY__);
+
+
+// ---------------------------------------------------------------
+// Diễn đàn: đăng code, like/unlike, bình luận, ghi chú theo dòng.
+// Mọi nội dung người dùng chỉ được đưa vào trang bằng textContent (không bao giờ là HTML).
+// ---------------------------------------------------------------
+const forum = {key: "", sort: "new", query: "", page: 1, status: null, postId: null, post: null, loaded: false, busy: false};
+
+function forumKey() {
+  if (forum.key) return forum.key;
+  let key = "";
+  try { key = localStorage.getItem("cppflow_forum_key") || ""; } catch (e) { key = ""; }
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(key)) {
+    const bytes = crypto.getRandomValues(new Uint8Array(24));
+    key = bytesToB64Url(bytes);
+    try { localStorage.setItem("cppflow_forum_key", key); } catch (e) { /* dùng tạm trong phiên */ }
+  }
+  forum.key = key;
+  return key;
+}
+
+function forumName() {
+  try { return localStorage.getItem("cppflow_forum_name") || ""; } catch (e) { return ""; }
+}
+function saveForumName(name) {
+  try { localStorage.setItem("cppflow_forum_name", name); } catch (e) { /* bỏ qua */ }
+}
+function adminToken() {
+  try { return sessionStorage.getItem("cppflow_admin") || ""; } catch (e) { return ""; }
+}
+
+async function forumApi(method, path, body) {
+  const headers = {"X-Forum-Key": forumKey()};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const token = adminToken();
+  if (token) headers["X-Admin-Token"] = token;
+  const response = await fetch(path, {method, headers, body: body === undefined ? undefined : JSON.stringify(body)});
+  let data = {};
+  try { data = await response.json(); } catch (e) { /* không phải JSON */ }
+  if (!response.ok) throw new Error(data.message || data.detail || `Lỗi ${response.status}`);
+  return data;
+}
+
+function timeAgo(ts) {
+  const diff = Math.max(0, Date.now() / 1000 - ts);
+  if (diff < 60) return "vừa xong";
+  if (diff < 3600) return `${Math.floor(diff / 60)} phút trước`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} giờ trước`;
+  if (diff < 86400 * 30) return `${Math.floor(diff / 86400)} ngày trước`;
+  return new Date(ts * 1000).toLocaleDateString("vi-VN");
+}
+
+function fEl(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function showForumPane(name) {
+  $("forum-list-view").hidden = name !== "list";
+  $("forum-new-view").hidden = name !== "new";
+  $("forum-post-view").hidden = name !== "post";
+  window.scrollTo({top: 0});
+}
+
+async function forumEnter() {
+  if (!forum.status) {
+    try {
+      forum.status = await (await fetch("/api/forum/status")).json();
+    } catch (e) { forum.status = {enabled: false}; }
+    const note = $("forum-note");
+    if (forum.status.storage === "sqlite") {
+      note.textContent = "Diễn đàn đang chạy ở chế độ thử (chưa nối cơ sở dữ liệu), bài đăng sẽ mất khi máy chủ khởi động lại.";
+      note.hidden = false;
+    }
+    $("forum-admin").hidden = !forum.status.adminEnabled;
+  }
+  if (forum.postId) return;                 // đang mở một bài: giữ nguyên
+  if ($("forum-new-view").hidden === false) return;
+  showForumPane("list");
+  if (!forum.loaded) await forumLoadList(true);
+}
+
+async function forumLoadList(reset) {
+  if (forum.busy) return;
+  forum.busy = true;
+  if (reset) { forum.page = 1; $("forum-cards").replaceChildren(fEl("p", "forum-empty", "Đang tải…")); }
+  try {
+    const data = await forumApi("GET", `/api/forum/posts?sort=${forum.sort}&q=${encodeURIComponent(forum.query)}&page=${forum.page}`);
+    const box = $("forum-cards");
+    if (reset) box.replaceChildren();
+    if (reset && !data.posts.length) box.appendChild(fEl("p", "forum-empty", forum.query ? "Không có bài nào khớp." : "Chưa có bài nào. Hãy là người đăng đầu tiên!"));
+    data.posts.forEach((post) => box.appendChild(forumCard(post)));
+    $("forum-more").hidden = !data.hasMore;
+    forum.loaded = true;
+  } catch (error) {
+    $("forum-cards").replaceChildren(fEl("p", "forum-empty", error.message));
+  } finally {
+    forum.busy = false;
+  }
+}
+
+function forumCard(post) {
+  const card = fEl("article", "forum-card");
+  card.tabIndex = 0;
+  card.appendChild(fEl("h3", "", post.title));
+  const meta = fEl("div", "forum-meta");
+  [post.author, timeAgo(post.createdAt), `👍 ${post.likes}`, `👎 ${post.dislikes}`, `💬 ${post.comments}`, `${post.lines} dòng`]
+    .forEach((text) => meta.appendChild(fEl("span", "", text)));
+  card.appendChild(meta);
+  if (post.description) card.appendChild(fEl("p", "forum-desc", post.description));
+  card.appendChild(fEl("pre", "forum-pre", post.preview));
+  const open = () => forumOpenPost(post.id);
+  card.addEventListener("click", open);
+  card.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
+  return card;
+}
+
+let forumSearchTimer = null;
+$("forum-search").addEventListener("input", () => {
+  clearTimeout(forumSearchTimer);
+  forumSearchTimer = setTimeout(() => { forum.query = $("forum-search").value.trim(); forumLoadList(true); }, 350);
+});
+$("forum-sort").addEventListener("change", () => { forum.sort = $("forum-sort").value; forumLoadList(true); });
+$("forum-more").addEventListener("click", () => { forum.page += 1; forumLoadList(false); });
+
+$("forum-admin").addEventListener("click", () => {
+  if (adminToken()) {
+    try { sessionStorage.removeItem("cppflow_admin"); } catch (e) { /* bỏ qua */ }
+    $("forum-admin").textContent = "Quản trị";
+    showToast("Đã thoát chế độ quản trị.");
+  } else {
+    const token = prompt("Nhập mã quản trị:");
+    if (!token) return;
+    try { sessionStorage.setItem("cppflow_admin", token.trim()); } catch (e) { /* bỏ qua */ }
+    $("forum-admin").textContent = "Thoát quản trị";
+    showToast("Đã bật chế độ quản trị (nếu mã đúng, bạn sẽ thấy nút Xóa ở mọi bài).");
+  }
+  forumLoadList(true);
+});
+
+// ---- Đăng bài ----
+$("forum-new").addEventListener("click", () => {
+  $("fn-name").value = forumName();
+  $("fn-error").hidden = true;
+  showForumPane("new");
+});
+$("forum-new-back").addEventListener("click", () => showForumPane(forum.postId ? "post" : "list"));
+$("fn-fill").addEventListener("click", () => {
+  $("fn-code").value = $("code").value;
+  if (!$("fn-input").value) $("fn-input").value = $("stdin").value;
+});
+$("fn-submit").addEventListener("click", async () => {
+  const button = $("fn-submit");
+  const error = $("fn-error");
+  error.hidden = true;
+  button.disabled = true;
+  try {
+    const name = $("fn-name").value.trim();
+    saveForumName(name);
+    const data = await forumApi("POST", "/api/forum/posts", {
+      title: $("fn-title").value, description: $("fn-desc").value, code: $("fn-code").value,
+      input: $("fn-input").value, author: name,
+    });
+    ["fn-title", "fn-desc", "fn-code", "fn-input"].forEach((id) => { $(id).value = ""; });
+    forum.loaded = false;
+    showToast("Đã đăng bài!");
+    await forumOpenPost(data.id);
+  } catch (e) {
+    error.textContent = e.message;
+    error.hidden = false;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+// ---- Xem một bài ----
+function forumBack() {
+  forum.postId = null;
+  forum.post = null;
+  history.replaceState(null, "", location.pathname + location.search);
+  showForumPane("list");
+  if (!forum.loaded) forumLoadList(true);
+}
+
+async function forumOpenPost(id) {
+  forum.postId = id;
+  const view = $("forum-post-view");
+  view.replaceChildren(fEl("p", "forum-empty", "Đang tải…"));
+  showForumPane("post");
+  try {
+    forum.post = await forumApi("GET", `/api/forum/posts/${id}`);
+    history.replaceState(null, "", `#f${id}`);
+    forumRenderPost();
+  } catch (error) {
+    forum.postId = null;
+    view.replaceChildren();
+    const back = fEl("button", "share-button", "← Về danh sách");
+    back.addEventListener("click", forumBack);
+    view.append(fEl("p", "forum-empty", error.message), back);
+  }
+}
+
+function forumRenderPost() {
+  const post = forum.post;
+  const view = $("forum-post-view");
+  const box = fEl("div", "fp");
+
+  const back = fEl("button", "text-button", "← Về danh sách");
+  back.addEventListener("click", forumBack);
+  box.appendChild(back);
+  box.appendChild(fEl("h2", "", post.title));
+  const meta = fEl("div", "forum-meta");
+  [post.author, timeAgo(post.createdAt), `${post.lines} dòng`].forEach((t) => meta.appendChild(fEl("span", "", t)));
+  box.appendChild(meta);
+  if (post.description) box.appendChild(fEl("p", "forum-desc", post.description));
+
+  // hàng nút
+  const actions = fEl("div", "fp-actions");
+  const likeBtn = fEl("button", `share-button vote-btn${post.myVote === 1 ? " active" : ""}`, `👍 ${post.likes}`);
+  const dislikeBtn = fEl("button", `share-button vote-btn down${post.myVote === -1 ? " active" : ""}`, `👎 ${post.dislikes}`);
+  const castVote = async (value) => {
+    try {
+      const result = await forumApi("POST", `/api/forum/posts/${post.id}/vote`, {value: post.myVote === value ? 0 : value});
+      Object.assign(post, {likes: result.likes, dislikes: result.dislikes, myVote: result.myVote});
+      forum.loaded = false;
+      forumRenderPost();
+    } catch (e) { showToast(e.message, true); }
+  };
+  likeBtn.addEventListener("click", () => castVote(1));
+  dislikeBtn.addEventListener("click", () => castVote(-1));
+  const openRun = fEl("button", "share-button", "Mở trong trình soạn");
+  const openDebug = fEl("button", "share-button", "Debug code này");
+  const loadIntoEditor = (view) => {
+    markDebugSourceChanged();
+    $("code").value = post.code;
+    $("stdin").value = post.input || "";
+    updateCodeHighlight();
+    updateLineCount();
+    setView(view);
+  };
+  openRun.addEventListener("click", () => loadIntoEditor("run"));
+  openDebug.addEventListener("click", () => loadIntoEditor("debug"));
+  const copyLink = fEl("button", "share-button", "Chép link bài");
+  copyLink.addEventListener("click", async () => {
+    const ok = await copyText(`${location.origin}${location.pathname}#f${post.id}`);
+    showToast(ok ? "Đã sao chép link bài." : "Không tự sao chép được.", !ok);
+  });
+  const reportBtn = fEl("button", "share-button", "Báo cáo");
+  reportBtn.addEventListener("click", async () => {
+    if (!confirm("Báo cáo bài này là spam hoặc nội dung không phù hợp?")) return;
+    try {
+      const r = await forumApi("POST", `/api/forum/post/${post.id}/report`);
+      showToast(r.hidden ? "Bài đã bị ẩn." : "Đã gửi báo cáo, cảm ơn bạn.");
+      if (r.hidden) forumBack();
+    } catch (e) { showToast(e.message, true); }
+  });
+  actions.append(likeBtn, dislikeBtn, openRun, openDebug, copyLink, reportBtn);
+  if (post.canDelete) {
+    const del = fEl("button", "share-button", "Xóa bài");
+    del.addEventListener("click", async () => {
+      if (!confirm("Xóa bài này?")) return;
+      try { await forumApi("DELETE", `/api/forum/post/${post.id}`); forum.loaded = false; showToast("Đã xóa bài."); forumBack(); }
+      catch (e) { showToast(e.message, true); }
+    });
+    actions.appendChild(del);
+  }
+  box.appendChild(actions);
+
+  // code theo từng dòng, ghi chú dưới dòng tương ứng
+  box.appendChild(fEl("p", "muted-text", "Bấm vào số dòng để ghi chú cho dòng đó."));
+  const byLine = {};
+  post.commentList.filter((c) => c.line).forEach((c) => { (byLine[c.line] = byLine[c.line] || []).push(c); });
+  const codeBox = fEl("div", "fp-code");
+  post.code.split("\n").forEach((text, index) => {
+    const n = index + 1;
+    const row = fEl("div", "fp-line");
+    const num = fEl("button", "fp-num", String(n));
+    num.title = `Ghi chú cho dòng ${n}`;
+    row.append(num, fEl("span", "fp-text", text || " "));
+    codeBox.appendChild(row);
+    (byLine[n] || []).forEach((c) => codeBox.appendChild(forumNote(c, "fp-note", true)));
+    num.addEventListener("click", () => forumInlineForm(codeBox, row, n));
+  });
+  box.appendChild(codeBox);
+
+  // bình luận chung
+  const general = post.commentList.filter((c) => !c.line);
+  const total = post.commentList.length;
+  box.appendChild(fEl("h3", "", `Bình luận (${total})`));
+  const list = fEl("div", "fp-comments");
+  if (!general.length) list.appendChild(fEl("p", "muted-text", "Chưa có bình luận chung."));
+  general.forEach((c) => list.appendChild(forumNote(c, "fp-comment", false)));
+  box.appendChild(list);
+
+  const form = fEl("div", "fp-form");
+  const name = fEl("input", "forum-input");
+  name.placeholder = "Tên của bạn (Ẩn danh)";
+  name.maxLength = 30;
+  name.value = forumName();
+  const text = fEl("textarea", "forum-input wide");
+  text.rows = 3;
+  text.maxLength = 1000;
+  text.placeholder = "Viết bình luận… (không chứa link)";
+  const send = fEl("button", "share-button forum-primary", "Gửi bình luận");
+  send.addEventListener("click", () => forumSendComment(post.id, name, text, null, send));
+  form.append(name, text, send);
+  box.appendChild(form);
+
+  view.replaceChildren(box);
+}
+
+function forumNote(c, className, isLine) {
+  const node = fEl("div", className);
+  node.appendChild(fEl("b", "", c.author));
+  node.appendChild(fEl("span", "mini", `${isLine ? `dòng ${c.line} · ` : ""}${timeAgo(c.createdAt)}`));
+  if (c.canDelete) {
+    const del = fEl("button", "mini-btn", "xóa");
+    del.addEventListener("click", async () => {
+      try { await forumApi("DELETE", `/api/forum/comment/${c.id}`); forumOpenPost(forum.postId); }
+      catch (e) { showToast(e.message, true); }
+    });
+    node.appendChild(del);
+  }
+  const report = fEl("button", "mini-btn", "báo cáo");
+  report.addEventListener("click", async () => {
+    try { const r = await forumApi("POST", `/api/forum/comment/${c.id}/report`); showToast(r.hidden ? "Đã ẩn bình luận." : "Đã gửi báo cáo."); if (r.hidden) forumOpenPost(forum.postId); }
+    catch (e) { showToast(e.message, true); }
+  });
+  node.appendChild(report);
+  node.appendChild(document.createElement("br"));
+  node.appendChild(document.createTextNode(c.body));
+  return node;
+}
+
+function forumInlineForm(codeBox, row, line) {
+  codeBox.querySelectorAll(".fp-inline").forEach((n) => n.remove());
+  const form = fEl("div", "fp-inline");
+  const name = fEl("input", "forum-input");
+  name.placeholder = "Tên của bạn (Ẩn danh)";
+  name.maxLength = 30;
+  name.value = forumName();
+  const text = fEl("textarea", "forum-input");
+  text.rows = 2;
+  text.maxLength = 1000;
+  text.placeholder = `Ghi chú cho dòng ${line}…`;
+  const bar = fEl("div", "fp-actions");
+  const send = fEl("button", "share-button forum-primary", "Lưu ghi chú");
+  const cancel = fEl("button", "text-button", "Hủy");
+  cancel.addEventListener("click", () => form.remove());
+  send.addEventListener("click", () => forumSendComment(forum.postId, name, text, line, send));
+  bar.append(send, cancel);
+  form.append(name, text, bar);
+  // chèn ngay dưới dòng (và dưới các ghi chú đã có của dòng đó)
+  let anchor = row;
+  while (anchor.nextSibling && anchor.nextSibling.classList && anchor.nextSibling.classList.contains("fp-note")) anchor = anchor.nextSibling;
+  anchor.after(form);
+  text.focus();
+}
+
+async function forumSendComment(postId, nameInput, textInput, line, button) {
+  button.disabled = true;
+  try {
+    saveForumName(nameInput.value.trim());
+    await forumApi("POST", `/api/forum/posts/${postId}/comments`, {body: textInput.value, line, author: nameInput.value.trim()});
+    forum.loaded = false;
+    await forumOpenPost(postId);
+    showToast(line ? "Đã lưu ghi chú." : "Đã gửi bình luận.");
+  } catch (error) {
+    showToast(error.message, true);
+    button.disabled = false;
+  }
+}
+
+// Link trực tiếp tới một bài: #f<số>
+(function openForumFromHash() {
+  const match = /^#f(\d+)$/.exec(location.hash);
+  if (!match) return;
+  setView("forum");
+  forumOpenPost(Number(match[1]));
+})();

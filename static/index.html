@@ -44,6 +44,10 @@
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="4"/><path d="m9 9 3.5 3.5"/></svg>
           Tìm lỗi
         </button>
+        <button type="button" class="mode-btn" data-view="forum" aria-pressed="false">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 2.5h10v7H6l-3 2.5v-2.5H2z"/></svg>
+          Diễn đàn
+        </button>
       </div>
       <label class="select-label hide-in-stress">Mẫu code
         <select id="example-select">
@@ -257,6 +261,41 @@
         </div>
       </aside>
     </main>
+
+    <section id="forum" class="forum" hidden aria-label="Diễn đàn">
+      <div id="forum-list-view">
+        <div class="forum-head">
+          <div><h2>Diễn đàn code</h2><p class="muted-text">Đăng code của bạn, xem code người khác, like, bình luận và ghi chú theo từng dòng.</p></div>
+          <div class="forum-tools">
+            <input id="forum-search" class="forum-input" type="search" placeholder="Tìm bài…" maxlength="60" />
+            <select id="forum-sort" class="small-select" aria-label="Sắp xếp">
+              <option value="new">Mới nhất</option>
+              <option value="top">Nhiều like</option>
+            </select>
+            <button type="button" id="forum-admin" class="share-button" hidden>Quản trị</button>
+            <button type="button" id="forum-new" class="share-button forum-primary">+ Đăng code</button>
+          </div>
+        </div>
+        <p id="forum-note" class="forum-note" hidden></p>
+        <div id="forum-cards" class="forum-cards"></div>
+        <div class="forum-more"><button type="button" id="forum-more" class="debug-button" hidden>Xem thêm</button></div>
+      </div>
+
+      <div id="forum-new-view" class="forum-form" hidden>
+        <div class="forum-head"><h2>Đăng code mới</h2><button type="button" id="forum-new-back" class="text-button">← Quay lại</button></div>
+        <label class="forum-label">Tiêu đề<input id="fn-title" class="forum-input wide" maxlength="100" placeholder="Ví dụ: Tính tổng 1..n, bị sai ở test lớn" /></label>
+        <label class="forum-label">Mô tả (không bắt buộc)<textarea id="fn-desc" class="forum-input wide" rows="3" maxlength="2000" placeholder="Bài toán là gì, bạn đang gặp vấn đề gì…"></textarea></label>
+        <label class="forum-label"><span class="forum-label-row">Code C++ <button type="button" id="fn-fill" class="text-button">Lấy code đang có trong trình soạn</button></span>
+          <textarea id="fn-code" class="forum-input wide mono" rows="14" spellcheck="false" wrap="off" placeholder="Dán code vào đây"></textarea></label>
+        <label class="forum-label">Input mẫu (không bắt buộc)<textarea id="fn-input" class="forum-input wide mono" rows="3" spellcheck="false" maxlength="5000"></textarea></label>
+        <label class="forum-label">Tên hiển thị<input id="fn-name" class="forum-input" maxlength="30" placeholder="Ẩn danh" /></label>
+        <p class="muted-text">Vì lý do an toàn, tiêu đề, mô tả, tên và bình luận không được chứa đường link.</p>
+        <p id="fn-error" class="forum-error" hidden></p>
+        <div class="forum-actions"><button type="button" id="fn-submit" class="share-button forum-primary">Đăng bài</button></div>
+      </div>
+
+      <div id="forum-post-view" hidden></div>
+    </section>
 
     <footer><span>C++ Flow</span><span>Code được gửi tới máy chủ để chạy. Đừng nhập thông tin nhạy cảm.</span></footer>
   </div>

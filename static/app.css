@@ -267,3 +267,52 @@ body.replay-view #share-code,
 body.replay-view #reset-code,
 body.replay-view .hide-in-stress,
 body.replay-view #backend-status { display: none !important; }
+
+/* ---- Diễn đàn ---- */
+.forum { max-width: 980px; margin: 0 auto; padding: 8px 0 40px; display: flex; flex-direction: column; gap: 16px; }
+.forum h2 { margin: 0 0 4px; font-size: 22px; }
+.forum-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.forum-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.forum-input { background: var(--panel-deep); border: 1px solid var(--line); border-radius: 9px; color: var(--text); padding: 9px 12px; font: 13px Manrope, system-ui, sans-serif; }
+.forum-input.wide { width: 100%; }
+.forum-input.mono { font: 12.5px/1.6 var(--mono); }
+.forum-input:focus { outline: none; border-color: var(--accent); }
+.forum-primary { background: #5b3fd1; border-color: #7c5cf0; color: #fff; }
+.forum-primary:hover { background: #6a4ee0; }
+.forum-note { margin: 0; padding: 10px 14px; border: 1px solid #5b4a1a; background: #231d0b; color: #f5d98b; border-radius: 10px; font-size: 12.5px; }
+.forum-cards { display: flex; flex-direction: column; gap: 12px; }
+.forum-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; cursor: pointer; display: flex; flex-direction: column; gap: 8px; }
+.forum-card:hover { border-color: #6d5bc7; }
+.forum-card h3 { margin: 0; font-size: 16px; }
+.forum-meta { color: var(--muted); font-size: 12px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+.forum-desc { margin: 0; color: var(--text-2); font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+.forum-pre { margin: 0; background: var(--panel-deep); border-radius: 8px; padding: 10px 12px; font: 12px/1.6 var(--mono); color: #d8d5ea; white-space: pre; overflow: hidden; max-height: 9.6em; }
+.forum-empty { color: var(--muted); text-align: center; padding: 40px 0; }
+.forum-more { display: flex; justify-content: center; }
+.forum-form { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.forum-label { display: flex; flex-direction: column; gap: 6px; font: 700 12px Manrope, system-ui, sans-serif; color: var(--text-2); }
+.forum-label-row { display: flex; justify-content: space-between; align-items: center; }
+.forum-error { margin: 0; color: var(--red); font-size: 13px; }
+.forum-actions { display: flex; gap: 10px; }
+.fp { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+.fp-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.vote-btn.active { border-color: var(--green); color: var(--green); }
+.vote-btn.active.down { border-color: var(--red); color: var(--red); }
+.fp-code { background: var(--panel-deep); border-radius: 10px; padding: 8px 0; overflow-x: auto; font: 12.5px/1.65 var(--mono); }
+.fp-line { display: flex; }
+.fp-line:hover { background: #151522; }
+.fp-num { flex: none; width: 48px; text-align: right; padding-right: 12px; color: #6a6884; cursor: pointer; user-select: none; background: none; border: 0; font: inherit; }
+.fp-num:hover { color: var(--accent-soft); }
+.fp-text { white-space: pre; color: #f0eff8; padding-right: 16px; }
+.fp-note { margin: 2px 12px 6px 60px; padding: 7px 10px; background: #1a1830; border-left: 3px solid var(--accent); border-radius: 6px; font: 12.5px/1.55 Manrope, system-ui, sans-serif; color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
+.fp-note b { color: #fff; }
+.fp-note .mini { color: var(--muted); font-size: 11px; margin-left: 8px; }
+.fp-inline { margin: 4px 12px 8px 60px; display: flex; flex-direction: column; gap: 6px; font-family: Manrope, system-ui, sans-serif; }
+.fp-comments { display: flex; flex-direction: column; gap: 10px; }
+.fp-comment { background: var(--panel-deep); border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px; font-size: 13px; color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
+.fp-comment b { color: #fff; }
+.fp-comment .mini, .mini { color: var(--muted); font-size: 11px; margin-left: 8px; }
+.mini-btn { background: none; border: 0; color: var(--muted); font-size: 11px; cursor: pointer; margin-left: 8px; padding: 0; }
+.mini-btn:hover { color: var(--red); }
+.fp-form { display: flex; flex-direction: column; gap: 8px; }
+.fp .muted-text, .forum-form .muted-text { font-size: 12.5px; }
