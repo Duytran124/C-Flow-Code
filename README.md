@@ -171,3 +171,10 @@ GDB dừng ở lần tràn đầu tiên để lấy dòng và giá trị biến,
 nút **Ghi cả chương trình** (chạy nhanh hết chương trình để ghi), **Chia sẻ link** (dữ liệu nén trong phần `#` của URL, không lưu gì trên máy chủ)
 và **Tải file .html** (một file duy nhất chứa cả web + bản ghi, mở offline bằng trình duyệt). Người xem chỉ thấy chế độ phát lại,
 có nút "Tự thử với code này" để nạp code vào web.
+
+## Diễn đàn v20
+Tab **Diễn đàn**: đăng code, like/unlike, bình luận và ghi chú theo từng dòng (`app/forum.py`, `/api/forum/*`).
+- Lưu trữ: đặt biến môi trường `DATABASE_URL` (Postgres, ví dụ Neon) để dữ liệu lưu lâu dài. Không đặt thì dùng SQLite tạm (mất khi deploy lại).
+- Không cần đăng nhập: trình duyệt có mã ẩn ngẫu nhiên; máy chủ chỉ lưu bản băm. Chủ bài tự xóa được bài/bình luận của mình.
+- An toàn: nội dung luôn hiển thị dạng văn bản, tiêu đề/mô tả/tên/bình luận không được chứa link, có giới hạn tốc độ, bài bị 3 người báo cáo tự ẩn.
+- Quản trị (tùy chọn): đặt `FORUM_ADMIN_TOKEN`, bấm nút "Quản trị" trong Diễn đàn và nhập mã để xóa mọi bài.
