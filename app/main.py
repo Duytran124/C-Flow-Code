@@ -16,6 +16,7 @@ from app.runner import run_cpp, DockerUnavailable, RunnerError
 from app.stress import run_stress
 from app.diverge import run_diverge
 from app.crash import run_crash
+from app import forum
 from app.debugger import (
     DebuggerError,
     DockerUnavailable as DebugDockerUnavailable,
@@ -113,6 +114,24 @@ class DivergeRequest(BaseModel):
     mine: str = Field(max_length=100_000)
     brute: str = Field(max_length=100_000)
     input: str = Field(default="", max_length=20_000)
+
+
+class ForumPostRequest(BaseModel):
+    title: str = Field(max_length=500)
+    description: str = Field(default="", max_length=5000)
+    code: str = Field(max_length=60_000)
+    input: str = Field(default="", max_length=20_000)
+    author: str = Field(default="", max_length=200)
+
+
+class ForumVoteRequest(BaseModel):
+    value: int
+
+
+class ForumCommentRequest(BaseModel):
+    body: str = Field(max_length=5000)
+    line: int | None = None
+    author: str = Field(default="", max_length=200)
 
 
 class CrashRequest(BaseModel):
@@ -262,6 +281,71 @@ def diverge(request: DivergeRequest, http_request: Request):
         return {"status": "error", "kind": "environment", "message": str(exc)}
     except RunnerError as exc:
         return {"status": "error", "kind": "runner", "message": str(exc)}
+
+
+def _forum_call(request: Request, fn):
+    """Gọi một hàm diễn đàn, đổi lỗi thành JSON dễ hiểu."""
+    try:
+        owner = forum.owner_hash(request.headers.get("x-forum-key", ""))
+        admin = forum.is_admin(request.headers.get("x-admin-token", ""))
+        return fn(owner, admin, _client_key(request))
+    except forum.ForumError as exc:
+        return JSONResponse({"status": "error", "message": exc.message}, status_code=exc.status)
+    except ImportError:
+        return JSONResponse({"status": "error", "message": "Máy chủ thiếu thư viện psycopg. Hãy thêm vào requirements.txt."}, status_code=503)
+    except Exception as exc:  # lỗi database / mạng tới database
+        print(f"[forum] lỗi: {type(exc).__name__}: {exc}", flush=True)
+        return JSONResponse({"status": "error", "message": "Không kết nối được cơ sở dữ liệu diễn đàn. Hãy thử lại sau ít giây."}, status_code=503)
+
+
+@app.get("/api/forum/status")
+def forum_status():
+    return {"enabled": True, "storage": forum.storage_kind(), "adminEnabled": bool(forum.ADMIN_TOKEN)}
+
+
+@app.get("/api/forum/posts")
+def forum_posts(request: Request, sort: str = "new", q: str = "", page: int = 1):
+    return _forum_call(request, lambda owner, admin, who: forum.list_posts(owner, admin, sort, q, page))
+
+
+@app.get("/api/forum/posts/{post_id}")
+def forum_post(post_id: int, request: Request):
+    return _forum_call(request, lambda owner, admin, who: forum.get_post(post_id, owner, admin))
+
+
+@app.post("/api/forum/posts")
+def forum_create(body: ForumPostRequest, request: Request):
+    def work(owner, admin, who):
+        post_id = forum.create_post(owner, who, body.title, body.description, body.code, body.input, body.author)
+        return {"status": "ok", "id": post_id}
+    return _forum_call(request, work)
+
+
+@app.post("/api/forum/posts/{post_id}/vote")
+def forum_vote(post_id: int, body: ForumVoteRequest, request: Request):
+    return _forum_call(request, lambda owner, admin, who: forum.vote(owner, who, post_id, body.value))
+
+
+@app.post("/api/forum/posts/{post_id}/comments")
+def forum_comment(post_id: int, body: ForumCommentRequest, request: Request):
+    return _forum_call(request, lambda owner, admin, who: forum.add_comment(owner, who, post_id, body.body, body.line, body.author))
+
+
+@app.post("/api/forum/{kind}/{item_id}/report")
+def forum_report(kind: str, item_id: int, request: Request):
+    if kind not in ("post", "comment"):
+        raise HTTPException(status_code=404)
+    return _forum_call(request, lambda owner, admin, who: forum.report(kind, item_id, owner, who))
+
+
+@app.delete("/api/forum/{kind}/{item_id}")
+def forum_delete(kind: str, item_id: int, request: Request):
+    if kind not in ("post", "comment"):
+        raise HTTPException(status_code=404)
+    def work(owner, admin, who):
+        forum.delete_item(kind, item_id, owner, admin)
+        return {"status": "ok"}
+    return _forum_call(request, work)
 
 
 @app.post("/api/crash")
