@@ -1978,7 +1978,7 @@ if (window.__REPLAY__) enterReplayView(window.__REPLAY__);
 // Diễn đàn: đăng code, like/unlike, bình luận, ghi chú theo dòng.
 // Mọi nội dung người dùng chỉ được đưa vào trang bằng textContent (không bao giờ là HTML).
 // ---------------------------------------------------------------
-const forum = {key: "", sort: "new", query: "", page: 1, status: null, postId: null, post: null, loaded: false, busy: false};
+const forum = {admin: false, key: "", sort: "new", query: "", page: 1, status: null, postId: null, post: null, loaded: false, busy: false};
 
 function forumKey() {
   if (forum.key) return forum.key;
@@ -2049,6 +2049,9 @@ async function forumEnter() {
       note.hidden = false;
     }
     $("forum-admin").hidden = !forum.status.adminEnabled;
+    if (forum.status.adminEnabled && adminToken()) {
+      try { await forumApi("GET", "/api/forum/admin/check"); setAdminMode(true); } catch (e) { setAdminMode(false); }
+    }
   }
   if (forum.postId) return;                 // đang mở một bài: giữ nguyên
   if ($("forum-new-view").hidden === false) return;
@@ -2099,19 +2102,120 @@ $("forum-search").addEventListener("input", () => {
 $("forum-sort").addEventListener("change", () => { forum.sort = $("forum-sort").value; forumLoadList(true); });
 $("forum-more").addEventListener("click", () => { forum.page += 1; forumLoadList(false); });
 
-$("forum-admin").addEventListener("click", () => {
-  if (adminToken()) {
-    try { sessionStorage.removeItem("cppflow_admin"); } catch (e) { /* bỏ qua */ }
-    $("forum-admin").textContent = "Quản trị";
-    showToast("Đã thoát chế độ quản trị.");
-  } else {
-    const token = prompt("Nhập mã quản trị:");
-    if (!token) return;
-    try { sessionStorage.setItem("cppflow_admin", token.trim()); } catch (e) { /* bỏ qua */ }
-    $("forum-admin").textContent = "Thoát quản trị";
-    showToast("Đã bật chế độ quản trị (nếu mã đúng, bạn sẽ thấy nút Xóa ở mọi bài).");
+// ---- Quản trị viên ----
+const REASON_LABELS = {spam: "Spam", scam: "Link/lừa đảo", malware: "Code độc hại", inappropriate: "Không phù hợp", other: "Khác"};
+
+function askReportReason() {
+  const dialog = $("report-dialog");
+  return new Promise((resolve) => {
+    const form = $("report-form");
+    const done = () => {
+      dialog.removeEventListener("close", done);
+      const value = dialog.returnValue === "send" ? (new FormData(form).get("reason") || "other") : null;
+      resolve(value);
+    };
+    dialog.returnValue = "";
+    dialog.addEventListener("close", done);
+    dialog.showModal();
+  });
+}
+
+function setAdminMode(on) {
+  forum.admin = on;
+  $("forum-admin-bar").hidden = !on;
+  $("forum-admin").textContent = on ? "Thoát quản trị" : "Quản trị";
+  if (!on) showForumTab("posts");
+  else forumApi("GET", "/api/forum/admin/queue").then((d) => {
+    $("fa-count").textContent = String(d.pending);
+    $("fa-count").hidden = d.pending === 0;
+  }).catch(() => {});
+}
+
+function showForumTab(tab) {
+  const queue = tab === "queue";
+  $("forum-queue").hidden = !queue;
+  $("forum-cards").hidden = queue;
+  $("forum-more").parentElement.hidden = queue;
+  $("fa-tab-posts").classList.toggle("active", !queue);
+  $("fa-tab-queue").classList.toggle("active", queue);
+  if (queue) forumLoadQueue();
+}
+
+async function forumLoadQueue() {
+  const box = $("forum-queue");
+  box.replaceChildren(fEl("p", "forum-empty", "Đang tải…"));
+  try {
+    const data = await forumApi("GET", "/api/forum/admin/queue");
+    $("fa-count").textContent = String(data.pending);
+    $("fa-count").hidden = data.pending === 0;
+    box.replaceChildren();
+    if (!data.items.length) box.appendChild(fEl("p", "forum-empty", "Không có nội dung nào đang bị báo cáo. 🎉"));
+    data.items.forEach((item) => box.appendChild(queueCard(item)));
+  } catch (error) {
+    box.replaceChildren(fEl("p", "forum-empty", error.message));
   }
-  forumLoadList(true);
+}
+
+function queueCard(item) {
+  const card = fEl("article", "forum-card q-card");
+  const chips = fEl("div", "q-chips");
+  chips.appendChild(fEl("span", `q-chip ${item.pending ? "pending" : "shown"}`, item.pending ? "Đang bị ẩn, chờ duyệt" : "Đang hiển thị"));
+  chips.appendChild(fEl("span", "q-chip", item.kind === "post" ? "Bài đăng" : `Bình luận${item.line ? ` (dòng ${item.line})` : ""}`));
+  chips.appendChild(fEl("span", "q-chip", `${item.reports} báo cáo`));
+  Object.entries(item.reasons).forEach(([reason, n]) => chips.appendChild(fEl("span", "q-chip", `${REASON_LABELS[reason] || reason} ×${n}`)));
+  card.appendChild(chips);
+  if (item.title) card.appendChild(fEl("h3", "", item.title));
+  card.appendChild(fEl("div", "forum-meta", `${item.author} · ${timeAgo(item.createdAt)}`));
+  if (item.text) card.appendChild(fEl("p", "q-body", item.text));
+  if (item.code) card.appendChild(fEl("pre", "forum-pre", item.code));
+  const actions = fEl("div", "fp-actions");
+  const keep = fEl("button", "share-button", "Giữ lại (bỏ qua báo cáo)");
+  const del = fEl("button", "share-button", "Xóa");
+  const resolve = async (action) => {
+    if (action === "delete" && !confirm("Xóa nội dung này?")) return;
+    try {
+      await forumApi("POST", `/api/forum/admin/${item.kind}/${item.id}/resolve`, {action});
+      showToast(action === "keep" ? "Đã giữ lại nội dung." : "Đã xóa nội dung.");
+      forum.loaded = false;
+      forumLoadQueue();
+    } catch (e) { showToast(e.message, true); }
+  };
+  keep.addEventListener("click", () => resolve("keep"));
+  del.addEventListener("click", () => resolve("delete"));
+  actions.append(keep, del);
+  if (item.kind === "post" && !item.pending) {
+    const view = fEl("button", "share-button", "Xem bài");
+    view.addEventListener("click", () => forumOpenPost(item.id));
+    actions.appendChild(view);
+  }
+  card.appendChild(actions);
+  return card;
+}
+
+$("fa-tab-posts").addEventListener("click", () => showForumTab("posts"));
+$("fa-tab-queue").addEventListener("click", () => showForumTab("queue"));
+
+$("forum-admin").addEventListener("click", async () => {
+  if (forum.admin) {
+    try { sessionStorage.removeItem("cppflow_admin"); } catch (e) { /* bỏ qua */ }
+    setAdminMode(false);
+    showToast("Đã thoát chế độ quản trị.");
+    forumLoadList(true);
+    return;
+  }
+  const token = prompt("Nhập mã quản trị:");
+  if (!token) return;
+  try { sessionStorage.setItem("cppflow_admin", token.trim()); } catch (e) { /* bỏ qua */ }
+  try {
+    await forumApi("GET", "/api/forum/admin/check");
+    setAdminMode(true);
+    showToast("Đã bật chế độ quản trị.");
+    forumLoadList(true);
+    showForumTab("queue");
+  } catch (error) {
+    try { sessionStorage.removeItem("cppflow_admin"); } catch (e) { /* bỏ qua */ }
+    showToast("Mã quản trị không đúng.", true);
+  }
 });
 
 // ---- Đăng bài ----
@@ -2223,11 +2327,12 @@ function forumRenderPost() {
   });
   const reportBtn = fEl("button", "share-button", "Báo cáo");
   reportBtn.addEventListener("click", async () => {
-    if (!confirm("Báo cáo bài này là spam hoặc nội dung không phù hợp?")) return;
+    const reason = await askReportReason();
+    if (!reason) return;
     try {
-      const r = await forumApi("POST", `/api/forum/post/${post.id}/report`);
-      showToast(r.hidden ? "Bài đã bị ẩn." : "Đã gửi báo cáo, cảm ơn bạn.");
-      if (r.hidden) forumBack();
+      const r = await forumApi("POST", `/api/forum/post/${post.id}/report`, {reason});
+      showToast(r.hidden ? "Bài đã bị ẩn tạm thời và chờ quản trị viên duyệt." : "Đã gửi báo cáo, cảm ơn bạn.");
+      if (r.hidden) { forum.loaded = false; forumBack(); }
     } catch (e) { showToast(e.message, true); }
   });
   actions.append(likeBtn, dislikeBtn, openRun, openDebug, copyLink, reportBtn);
@@ -2299,7 +2404,9 @@ function forumNote(c, className, isLine) {
   }
   const report = fEl("button", "mini-btn", "báo cáo");
   report.addEventListener("click", async () => {
-    try { const r = await forumApi("POST", `/api/forum/comment/${c.id}/report`); showToast(r.hidden ? "Đã ẩn bình luận." : "Đã gửi báo cáo."); if (r.hidden) forumOpenPost(forum.postId); }
+    const reason = await askReportReason();
+    if (!reason) return;
+    try { const r = await forumApi("POST", `/api/forum/comment/${c.id}/report`, {reason}); showToast(r.hidden ? "Bình luận đã bị ẩn tạm thời và chờ quản trị viên duyệt." : "Đã gửi báo cáo, cảm ơn bạn."); if (r.hidden) forumOpenPost(forum.postId); }
     catch (e) { showToast(e.message, true); }
   });
   node.appendChild(report);

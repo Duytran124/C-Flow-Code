@@ -262,6 +262,22 @@
       </aside>
     </main>
 
+    <dialog id="report-dialog" class="report-dialog">
+      <form method="dialog" id="report-form">
+        <h3>Báo cáo nội dung này</h3>
+        <p class="muted-text">Chọn lý do. Khi có đủ 3 người báo cáo, nội dung sẽ bị ẩn tạm thời và chờ quản trị viên duyệt.</p>
+        <label class="report-opt"><input type="radio" name="reason" value="spam" checked /> Spam hoặc quảng cáo</label>
+        <label class="report-opt"><input type="radio" name="reason" value="scam" /> Link hoặc nội dung lừa đảo</label>
+        <label class="report-opt"><input type="radio" name="reason" value="malware" /> Code độc hại</label>
+        <label class="report-opt"><input type="radio" name="reason" value="inappropriate" /> Nội dung không phù hợp</label>
+        <label class="report-opt"><input type="radio" name="reason" value="other" /> Lý do khác</label>
+        <div class="forum-actions">
+          <button type="submit" value="send" class="share-button forum-primary">Gửi báo cáo</button>
+          <button type="submit" value="cancel" class="share-button" formnovalidate>Hủy</button>
+        </div>
+      </form>
+    </dialog>
+
     <section id="forum" class="forum" hidden aria-label="Diễn đàn">
       <div id="forum-list-view">
         <div class="forum-head">
@@ -276,7 +292,13 @@
             <button type="button" id="forum-new" class="share-button forum-primary">+ Đăng code</button>
           </div>
         </div>
+        <div id="forum-admin-bar" class="forum-admin-bar" hidden>
+          <span class="forum-admin-tag">Chế độ quản trị</span>
+          <button type="button" id="fa-tab-posts" class="share-button active">Bài đăng</button>
+          <button type="button" id="fa-tab-queue" class="share-button">Hàng đợi báo cáo <span id="fa-count" class="fa-count">0</span></button>
+        </div>
         <p id="forum-note" class="forum-note" hidden></p>
+        <div id="forum-queue" class="forum-cards" hidden></div>
         <div id="forum-cards" class="forum-cards"></div>
         <div class="forum-more"><button type="button" id="forum-more" class="debug-button" hidden>Xem thêm</button></div>
       </div>

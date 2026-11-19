@@ -316,3 +316,19 @@ body.replay-view #backend-status { display: none !important; }
 .mini-btn:hover { color: var(--red); }
 .fp-form { display: flex; flex-direction: column; gap: 8px; }
 .fp .muted-text, .forum-form .muted-text { font-size: 12.5px; }
+
+.forum-admin-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 14px; border: 1px solid #5b4a1a; background: #1c180a; border-radius: 10px; }
+.forum-admin-tag { color: #f5d98b; font: 800 12px Manrope, system-ui, sans-serif; margin-right: 6px; }
+.forum-admin-bar .share-button.active { border-color: #f5d98b; color: #f5d98b; }
+.fa-count { background: var(--red); color: #fff; border-radius: 999px; padding: 0 7px; font-size: 11px; margin-left: 4px; }
+.report-dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 20px; max-width: 420px; width: calc(100% - 32px); }
+.report-dialog::backdrop { background: rgba(0, 0, 0, .6); }
+.report-dialog h3 { margin: 0 0 6px; }
+.report-opt { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13.5px; cursor: pointer; }
+.report-dialog .forum-actions { margin-top: 14px; }
+.q-card { border-color: #5b4a1a; }
+.q-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.q-chip { background: #2a1a1f; color: #fda4af; border: 1px solid #5b2a3a; border-radius: 999px; padding: 1px 9px; font-size: 11.5px; font-weight: 700; }
+.q-chip.pending { background: #3a1823; color: #fff; }
+.q-chip.shown { background: #1a2a26; color: var(--green); border-color: #245a4d; }
+.q-body { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--text-2); font-size: 13px; }
